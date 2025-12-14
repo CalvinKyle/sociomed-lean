@@ -354,7 +354,7 @@ def verify_webhook():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or request.form
         if not data or data.get("object") != "whatsapp_business_account":
             return jsonify({"status": "ignored"}), 200
         
