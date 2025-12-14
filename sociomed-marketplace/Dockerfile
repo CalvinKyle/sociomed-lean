@@ -4,14 +4,13 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (needed for psycopg2 and PDF tools)
+# Install system dependencies (for psycopg2 if needed)
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python libraries
-# Combined dependencies for Bot, PDF Tools, and CSV Importer
+# Install Python dependencies in one layer
 RUN pip install --no-cache-dir \
     pandas \
     sqlalchemy \
@@ -23,14 +22,14 @@ RUN pip install --no-cache-dir \
     beautifulsoup4 \
     pypdf \
     google-generativeai \
-    python-dotenv 
+    python-dotenv
 
-# Copy source code
-COPY ./src /app/src
-COPY ./data /app/data
+# Copy only the application code (data and db handled by volumes)
+COPY app/ /app/
 
-# Expose port for Flask
+# Expose Flask port
 EXPOSE 5000
 
-# Default command: Starts the WhatsApp bot automatically
-CMD ["python", "src/whatsapp_bot.py"]
+# Run the WhatsApp bot with unbuffered output (better logs)
+CMD ["python", "-u", "/app/whatsapp_bot.py"]
+
