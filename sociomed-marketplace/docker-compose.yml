@@ -1,7 +1,7 @@
 services:
   sociomed-database:
     image: postgres:17-alpine               # Latest stable as of Dec 2025
-    container_name: sociomed-db
+    container_name: sociomed-database
     restart: unless-stopped
     environment:
       POSTGRES_USER: sociomed_user
