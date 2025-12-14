@@ -10,8 +10,6 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./db:/docker-entrypoint-initdb.d    # Mount entire db/ folder — all .sql files run automatically
-    ports:
-      - "5432:5432"                         # Only for local dev; remove in production
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sociomed_user -d sociomed"]
       interval: 10s

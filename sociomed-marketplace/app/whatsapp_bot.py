@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional, Any
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
+from recommendation_engine import get_recommendations
 import uuid
 import threading
 from functools import wraps
@@ -51,41 +52,75 @@ if GEMINI_API_KEY:
 
 # --- USER & CART MANAGEMENT (From Bot 2) ---
 class UserCartManager:
-    """Manages user sessions and shopping carts"""
-    def __init__(self, session_timeout_minutes=30):
+    """Manages user sessions and shopping carts with disk persistence"""
+    def __init__(self, session_timeout_minutes=30, persistence_file="/data/cart_state.json"):
+        self.persistence_file = persistence_file
+        self.session_timeout = timedelta(minutes=session_timeout_minutes)
         self.user_carts = defaultdict(list)  # phone -> list of cart items
         self.user_sessions = {}  # phone -> {'last_activity': datetime, 'state': str}
-        self.session_timeout = timedelta(minutes=session_timeout_minutes)
-    
+        self._load_state()  # Load from disk on startup
+
+    def _save_state(self):
+        """Persist carts and sessions to disk"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.persistence_file), exist_ok=True)
+            data = {
+                "carts": dict(self.user_carts),  # Convert defaultdict to dict
+                "sessions": {
+                    phone: {
+                        'last_activity': session['last_activity'].isoformat(),
+                        'state': session['state']
+                    } for phone, session in self.user_sessions.items()
+                }
+            }
+            with open(self.persistence_file, 'w') as f:
+                json.dump(data, f)
+            logger.info("Cart state saved to disk")
+        except Exception as e:
+            logger.error(f"Failed to save cart state: {e}")
+
+    def _load_state(self):
+        """Load carts and sessions from disk"""
+        if os.path.exists(self.persistence_file):
+            try:
+                with open(self.persistence_file, 'r') as f:
+                    data = json.load(f)
+                    self.user_carts = defaultdict(list, data.get("carts", {}))
+                    for phone, session_data in data.get("sessions", {}).items():
+                        self.user_sessions[phone] = {
+                            'last_activity': datetime.fromisoformat(session_data['last_activity']),
+                            'state': session_data['state']
+                        }
+                logger.info("Cart state loaded from disk")
+            except Exception as e:
+                logger.error(f"Failed to load cart state: {e}")
+
     def _clean_old_sessions(self):
-        """Remove expired sessions"""
+        """Remove expired sessions and save"""
         now = datetime.utcnow()
-        expired_users = [
-            phone for phone, session in self.user_sessions.items()
-            if now - session['last_activity'] > self.session_timeout
-        ]
-        for phone in expired_users:
+        expired = [phone for phone, session in self.user_sessions.items()
+                   if now - session['last_activity'] > self.session_timeout]
+        for phone in expired:
             self.clear_cart(phone)
             del self.user_sessions[phone]
             logger.info(f"Cleared expired session for {phone}")
-    
+
     def get_user_state(self, phone: str) -> str:
-        """Get current user conversation state"""
         self._clean_old_sessions()
         if phone not in self.user_sessions:
             return "NEW"
         return self.user_sessions[phone].get('state', 'SEARCHING')
-    
+
     def update_user_state(self, phone: str, state: str):
-        """Update user conversation state"""
         self.user_sessions[phone] = {
             'last_activity': datetime.utcnow(),
             'state': state
         }
-    
-    def add_to_cart(self, phone: str, product_id: str, product_name: str, 
+        self._save_state()  # Save on update
+
+    def add_to_cart(self, phone: str, product_id: str, product_name: str,
                    price: float, quantity: int = 1, notes: str = "") -> str:
-        """Add item to user's cart"""
         item_id = str(uuid.uuid4())[:8]
         item = {
             'item_id': item_id,
@@ -99,45 +134,40 @@ class UserCartManager:
         self.user_carts[phone].append(item)
         self.update_user_state(phone, "CART_ACTIVE")
         logger.info(f"Added item {item_id} to cart for {phone}")
+        self._save_state()  # Persist immediately
         return item_id
-    
+
     def remove_from_cart(self, phone: str, item_id: str) -> bool:
-        """Remove item from cart"""
         cart = self.user_carts.get(phone, [])
         for i, item in enumerate(cart):
             if item['item_id'] == item_id:
                 cart.pop(i)
                 logger.info(f"Removed item {item_id} from cart for {phone}")
+                self._save_state()
                 return True
         return False
-    
-    def get_cart(self, phone: str) -> List[Dict]:
-        """Get user's cart items"""
-        return self.user_carts.get(phone, [])
-    
-    def get_cart_summary(self, phone: str) -> Dict[str, Any]:
-        """Get cart summary with totals"""
-        cart = self.get_cart(phone)
-        if not cart:
-            return {"item_count": 0, "total": 0.0, "items": []}
-        
-        total = sum(item['price'] * item['quantity'] for item in cart)
-        return {
-            "item_count": len(cart),
-            "total": total,
-            "items": cart
-        }
-    
+
     def clear_cart(self, phone: str):
-        """Clear user's cart"""
         if phone in self.user_carts:
             self.user_carts[phone] = []
             logger.info(f"Cleared cart for {phone}")
-    
+            self._save_state()
+
+    def get_cart(self, phone: str) -> List[Dict]:
+        return self.user_carts.get(phone, [])
+
+    def get_cart_summary(self, phone: str) -> Dict[str, Any]:
+        cart = self.get_cart(phone)
+        if not cart:
+            return {"item_count": 0, "total": 0.0, "items": []}
+        total = sum(item['price'] * item['quantity'] for item in cart)
+        return {"item_count": len(cart), "total": total, "items": cart}
+
     def is_cart_empty(self, phone: str) -> bool:
-        """Check if cart is empty"""
         return len(self.user_carts.get(phone, [])) == 0
 
+
+# Global instance (used across webhook calls)
 cart_manager = UserCartManager()
 
 # --- DATABASE FUNCTIONS ---
@@ -313,48 +343,6 @@ def process_message_async(recipient_id: str, user_text: str):
         except Exception as e:
             logger.error(f"Error in async processing: {e}")
             send_whatsapp_message(recipient_id, "I'm experiencing technical issues. Please try again later.")
-
-# --- RECOMMENDATION HOOKS (From Bot 1) ---
-def get_recommendations(product_id: str) -> Dict[str, List[str]]:
-    """
-    Mock recommendation engine (integrate with actual module from Bot 1)
-    In production, replace with: from recommendation_engine import get_recommendations
-    """
-    # This is a mock - replace with actual implementation
-    try:
-        # Example mock recommendations based on product category
-        recommendations = {
-            'consumables': [],
-            'accessories': [],
-            'related': []
-        }
-        
-        # For demo purposes - in reality, call the actual recommendation engine
-        # recs = actual_recommendation_engine.get_recommendations(product_id)
-        # return recs or recommendations
-        
-        return recommendations
-        
-    except Exception as e:
-        logger.warning(f"Could not fetch recommendations: {e}")
-        return {'consumables': [], 'accessories': [], 'related': []}
-
-def add_recommendations_to_response(response_text: str, product_ids: List[str]) -> str:
-    """Add accessory recommendations to response (from Bot 1)"""
-    try:
-        for pid in product_ids:
-            recs = get_recommendations(pid)
-            if recs and recs.get('consumables'):
-                response_text += f"\n\n🔗 *Recommended accessories:*\n"
-                for item in recs['consumables'][:3]:  # Limit to 3
-                    response_text += f"• {item}\n"
-                # Add suggestion from Bot 1
-                response_text += f"\n_💡 Don't forget these essential items!_"
-                break  # Just for first product
-    except Exception as e:
-        logger.warning(f"Could not add recommendations: {e}")
-    
-    return response_text
 
 # --- AI FUNCTIONS WITH MASTER DB VALIDATION ---
 def generate_ai_response_with_context(user_query: str, master_db_results: List[Dict]) -> Tuple[str, bool]:
@@ -774,6 +762,53 @@ def handle_complex_query(query: str) -> str:
         final_response += footer
     
     return final_response
+    
+def process_message_async(recipient_id: str, user_text: str):
+    """Background task for heavy processing (DB + Gemini)"""
+    with app.app_context():  # Required for Flask context in threads
+        try:
+            logger.info(f"Starting async processing for {recipient_id}: {user_text[:50]}")
+
+            # === Copy ALL your existing processing logic here ===
+            # Check for quote/cart commands first
+            quote_response = handle_quote_command(recipient_id, user_text)
+            if quote_response:
+                send_whatsapp_message(recipient_id, quote_response)
+                return
+
+            # Detect intent
+            intent = detect_intent(user_text)
+            logger.info(f"Detected intent: {intent['type']}")
+
+            response_text = ""
+
+            if intent["type"] == "greeting":
+                response_text = handle_greeting()
+
+            elif intent["type"] == "simple_search":
+                response_text, _ = handle_simple_search(user_text)
+
+            elif intent["type"] == "price_check":
+                response_text = handle_price_check(user_text)
+
+            elif intent["type"] == "complex_query":
+                response_text = handle_complex_query(user_text)
+
+            else:
+                response_text = handle_complex_query(user_text)  # fallback
+
+            # Send the final response
+            if response_text:
+                success = send_whatsapp_message(recipient_id, response_text)
+                if not success:
+                    fallback = "Sorry, I'm having trouble responding right now. Please try again shortly."
+                    send_whatsapp_message(recipient_id, fallback)
+            else:
+                send_whatsapp_message(recipient_id, "I didn't understand that. Type 'HELP' for options.")
+
+        except Exception as e:
+            logger.error(f"Error in async processing: {e}")
+            send_whatsapp_message(recipient_id, "I'm experiencing technical issues. Please try again later.")
 
 # --- WHATSAPP API FUNCTIONS ---
 def send_whatsapp_message(recipient_id: str, message: str, max_retries: int = 3) -> bool:
@@ -860,7 +895,7 @@ def webhook():
                         recipient_id = message.get("from")
                         message_type = message.get("type")
                         
-                        if message_type == "text":
+                                                if message_type == "text":
                             user_text = message.get("text", {}).get("body", "").strip()
                             
                             if not user_text:
@@ -868,62 +903,32 @@ def webhook():
                             
                             logger.info(f"Message from {recipient_id}: {user_text[:50]}...")
                             
-                            # Handle CONFIRM QUOTE separately (PDF generation)
-                            if user_text.upper() == "CONFIRM QUOTE":
-                                success, quote_id = generate_and_send_quote(recipient_id)
-                                if success:
-                                    response = f"✅ *Quote Confirmed!*\n\n"
-                                    response += f"Quote ID: {quote_id}\n"
-                                    response += "Our sales team will contact you shortly with the PDF quote.\n\n"
-                                    response += "📧 Email: info@socio-med.com\n"
-                                    response += "📞 Phone: +256-777-411-435"
-                                else:
-                                    response = f"❌ Could not generate quote. Please contact sales directly.\n\n"
-                                    response += f"Error: {quote_id}"
-                                
-                                send_whatsapp_message(recipient_id, response)
-                                return jsonify({"status": "processed"}), 200
-                            
-                            # Check for quote/cart commands first (from Bot 1)
+                            # === FAST ACKNOWLEDGEMENT FOR QUICK COMMANDS ===
                             quote_response = handle_quote_command(recipient_id, user_text)
                             if quote_response:
                                 send_whatsapp_message(recipient_id, quote_response)
                                 return jsonify({"status": "processed"}), 200
-                            
-                            # Detect intent for other messages
-                            intent = detect_intent(user_text)
-                            logger.info(f"Detected intent: {intent['type']}")
-                            
-                            # Route based on intent
-                            response_text = ""
-                            
-                            if intent["type"] == "greeting":
-                                response_text = handle_greeting()
-                            
-                            elif intent["type"] == "simple_search":
-                                response_text, _ = handle_simple_search(user_text)
-                            
-                            elif intent["type"] == "price_check":
-                                response_text = handle_price_check(user_text)
-                            
-                            elif intent["type"] == "complex_query":
-                                response_text = handle_complex_query(user_text)
-                            
-                            else:
-                                # Fallback to complex query handler
-                                response_text = handle_complex_query(user_text)
-                            
-                            # Send response
-                            if response_text:
-                                success = send_whatsapp_message(recipient_id, response_text)
-                                if not success:
-                                    logger.error(f"Failed to send message to {recipient_id}")
-                                    # Send fallback message
-                                    fallback = "Sorry, I'm having trouble responding. Please try again in a moment or contact our sales team directly at sales@sociomed.com"
-                                    send_whatsapp_message(recipient_id, fallback)
-                            
-                            return jsonify({"status": "processed"}), 200
 
+                            # === CONFIRM QUOTE (fast response needed) ===
+                            if user_text.upper() == "CONFIRM QUOTE":
+                                success, quote_id = generate_and_send_quote(recipient_id)
+                                if success:
+                                    response = f"✅ *Quote Confirmed!*\n\nQuote ID: {quote_id}\nOur team will send the PDF shortly."
+                                else:
+                                    response = "❌ Could not generate quote. Please contact sales."
+                                send_whatsapp_message(recipient_id, response)
+                                return jsonify({"status": "processed"}), 200
+
+                            # === ALL OTHER MESSAGES: PROCESS IN BACKGROUND ===
+                            # Immediate 200 OK to WhatsApp
+                            thread = threading.Thread(
+                                target=process_message_async,
+                                args=(recipient_id, user_text)
+                            )
+                            thread.start()
+
+                            return jsonify({"status": "received"}), 200
+                            
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

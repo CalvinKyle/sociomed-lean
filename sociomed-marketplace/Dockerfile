@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir \
     fpdf2 \
     beautifulsoup4 \
     pypdf \
+    gunicorn \
     google-generativeai \
     python-dotenv
 
@@ -31,5 +32,5 @@ COPY app/ /app/
 EXPOSE 5001
 
 # Run the WhatsApp bot with unbuffered output (better logs)
-CMD ["python", "-u", "/app/whatsapp_bot.py"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "whatsapp_bot:app"]
 

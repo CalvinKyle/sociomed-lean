@@ -10,10 +10,12 @@ from sqlalchemy import create_engine, text
 # --- CONFIGURATION ---
 class Config:
     DB_USER = os.getenv('POSTGRES_USER', 'postgres')
-    DB_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'password')
+    DB_PASSWORD = os.getenv('POSTGRES_PASSWORD')
+    if not DB_PASSWORD:
+        raise ValueError("POSTGRES_PASSWORD is required.")
     DB_HOST = os.getenv('DATABASE_HOST', 'sociomed-database')
     DB_PORT = os.getenv('POSTGRES_PORT', '5432')
-    DB_NAME = os.getenv('POSTGRES_DB', 'medical_db')
+    DB_NAME = os.getenv('POSTGRES_DB', 'sociomed_db')
     
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     
