@@ -1,33 +1,39 @@
-version: '3.8'
-
 services:
   sociomed-database:
-    image: postgres:15-alpine
+    image: postgres:17-alpine               # Latest stable as of Dec 2025
     container_name: sociomed-db
-    restart: always
-    env_file:
-      - .env
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sociomed_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}     # Loaded from .env
+      POSTGRES_DB: sociomed
     volumes:
-      # RESTORED: This creates your tables automatically
-      - ./db/marketplace_schema.sql:/docker-entrypoint-initdb.d/init.sql
       - pg_data:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d    # Mount entire db/ folder — all .sql files run automatically
     ports:
-      - "5432:5432"
+      - "5432:5432"                         # Only for local dev; remove in production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sociomed_user -d sociomed"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   sociomed-app:
     build: .
     container_name: sociomed-app
+    restart: unless-stopped
     depends_on:
-      - sociomed-database
+      sociomed-database:
+        condition: service_healthy          # Waits for DB to be ready
     volumes:
-      - ./src:/app/src
-      - ./data:/app/data
-    # Simplest way to pass ALL variables from .env (including API Keys)
+      - ./app:/app                          # Code — hot-reload in dev
+      - ./data:/data                        # Input/processed Excel & PDFs
+      - ./logs:/logs                        # Logs persistence (optional)
     env_file:
-      - .env
+      - .env                                # Loads Gemini key, WhatsApp tokens, etc.
     ports:
-      - "5001:5000"
-    command: tail -f /dev/null
+      - "5001:5000"                         # Direct mapping
+    command: python -u /app/whatsapp_bot.py # Actually runs your bot
 
 volumes:
   pg_data:
