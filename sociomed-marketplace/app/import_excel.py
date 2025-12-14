@@ -20,7 +20,7 @@ class Config:
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     
     # Path inside Docker container (mapped to ./data in docker-compose)
-    BASE_DIR = "/app/data"
+    BASE_DIR = "/data/excel"
     PROCESSED_DIR = os.path.join(BASE_DIR, "processed")
     FAILED_DIR = os.path.join(BASE_DIR, "failed")
 
@@ -371,3 +371,4 @@ class SocioMedETL:
 
 if __name__ == "__main__":
     SocioMedETL().run()
+
