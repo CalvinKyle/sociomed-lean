@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
 import uuid
+import threading
 from functools import wraps
 
 # Configure logging
@@ -755,6 +756,53 @@ def handle_complex_query(query: str) -> str:
         final_response += footer
     
     return final_response
+    
+def process_message_async(recipient_id: str, user_text: str):
+    """Background task for heavy processing (DB + Gemini)"""
+    with app.app_context():  # Required for Flask context in threads
+        try:
+            logger.info(f"Starting async processing for {recipient_id}: {user_text[:50]}")
+
+            # === Copy ALL your existing processing logic here ===
+            # Check for quote/cart commands first
+            quote_response = handle_quote_command(recipient_id, user_text)
+            if quote_response:
+                send_whatsapp_message(recipient_id, quote_response)
+                return
+
+            # Detect intent
+            intent = detect_intent(user_text)
+            logger.info(f"Detected intent: {intent['type']}")
+
+            response_text = ""
+
+            if intent["type"] == "greeting":
+                response_text = handle_greeting()
+
+            elif intent["type"] == "simple_search":
+                response_text, _ = handle_simple_search(user_text)
+
+            elif intent["type"] == "price_check":
+                response_text = handle_price_check(user_text)
+
+            elif intent["type"] == "complex_query":
+                response_text = handle_complex_query(user_text)
+
+            else:
+                response_text = handle_complex_query(user_text)  # fallback
+
+            # Send the final response
+            if response_text:
+                success = send_whatsapp_message(recipient_id, response_text)
+                if not success:
+                    fallback = "Sorry, I'm having trouble responding right now. Please try again shortly."
+                    send_whatsapp_message(recipient_id, fallback)
+            else:
+                send_whatsapp_message(recipient_id, "I didn't understand that. Type 'HELP' for options.")
+
+        except Exception as e:
+            logger.error(f"Error in async processing: {e}")
+            send_whatsapp_message(recipient_id, "I'm experiencing technical issues. Please try again later.")
 
 # --- WHATSAPP API FUNCTIONS ---
 def send_whatsapp_message(recipient_id: str, message: str, max_retries: int = 3) -> bool:
@@ -841,7 +889,7 @@ def webhook():
                         recipient_id = message.get("from")
                         message_type = message.get("type")
                         
-                        if message_type == "text":
+                                                if message_type == "text":
                             user_text = message.get("text", {}).get("body", "").strip()
                             
                             if not user_text:
@@ -849,62 +897,32 @@ def webhook():
                             
                             logger.info(f"Message from {recipient_id}: {user_text[:50]}...")
                             
-                            # Handle CONFIRM QUOTE separately (PDF generation)
-                            if user_text.upper() == "CONFIRM QUOTE":
-                                success, quote_id = generate_and_send_quote(recipient_id)
-                                if success:
-                                    response = f"✅ *Quote Confirmed!*\n\n"
-                                    response += f"Quote ID: {quote_id}\n"
-                                    response += "Our sales team will contact you shortly with the PDF quote.\n\n"
-                                    response += "📧 Email: info@socio-med.com\n"
-                                    response += "📞 Phone: +256-777-411-435"
-                                else:
-                                    response = f"❌ Could not generate quote. Please contact sales directly.\n\n"
-                                    response += f"Error: {quote_id}"
-                                
-                                send_whatsapp_message(recipient_id, response)
-                                return jsonify({"status": "processed"}), 200
-                            
-                            # Check for quote/cart commands first (from Bot 1)
+                            # === FAST ACKNOWLEDGEMENT FOR QUICK COMMANDS ===
                             quote_response = handle_quote_command(recipient_id, user_text)
                             if quote_response:
                                 send_whatsapp_message(recipient_id, quote_response)
                                 return jsonify({"status": "processed"}), 200
-                            
-                            # Detect intent for other messages
-                            intent = detect_intent(user_text)
-                            logger.info(f"Detected intent: {intent['type']}")
-                            
-                            # Route based on intent
-                            response_text = ""
-                            
-                            if intent["type"] == "greeting":
-                                response_text = handle_greeting()
-                            
-                            elif intent["type"] == "simple_search":
-                                response_text, _ = handle_simple_search(user_text)
-                            
-                            elif intent["type"] == "price_check":
-                                response_text = handle_price_check(user_text)
-                            
-                            elif intent["type"] == "complex_query":
-                                response_text = handle_complex_query(user_text)
-                            
-                            else:
-                                # Fallback to complex query handler
-                                response_text = handle_complex_query(user_text)
-                            
-                            # Send response
-                            if response_text:
-                                success = send_whatsapp_message(recipient_id, response_text)
-                                if not success:
-                                    logger.error(f"Failed to send message to {recipient_id}")
-                                    # Send fallback message
-                                    fallback = "Sorry, I'm having trouble responding. Please try again in a moment or contact our sales team directly at sales@sociomed.com"
-                                    send_whatsapp_message(recipient_id, fallback)
-                            
-                            return jsonify({"status": "processed"}), 200
 
+                            # === CONFIRM QUOTE (fast response needed) ===
+                            if user_text.upper() == "CONFIRM QUOTE":
+                                success, quote_id = generate_and_send_quote(recipient_id)
+                                if success:
+                                    response = f"✅ *Quote Confirmed!*\n\nQuote ID: {quote_id}\nOur team will send the PDF shortly."
+                                else:
+                                    response = "❌ Could not generate quote. Please contact sales."
+                                send_whatsapp_message(recipient_id, response)
+                                return jsonify({"status": "processed"}), 200
+
+                            # === ALL OTHER MESSAGES: PROCESS IN BACKGROUND ===
+                            # Immediate 200 OK to WhatsApp
+                            thread = threading.Thread(
+                                target=process_message_async,
+                                args=(recipient_id, user_text)
+                            )
+                            thread.start()
+
+                            return jsonify({"status": "received"}), 200
+                            
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
