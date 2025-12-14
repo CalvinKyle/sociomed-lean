@@ -455,7 +455,7 @@ def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
     # Check for existing similar product
     existing = session.execute(
         text("""
-            SELECT id, name, sku FROM products 
+            SELECT product_id, name, sku FROM products 
             WHERE (sku = :sku AND sku IS NOT NULL AND sku != '')
                OR (name ILIKE :name AND category = :category)
             LIMIT 1
