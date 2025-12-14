@@ -296,6 +296,53 @@ def format_products_for_whatsapp(products: List[Dict], include_pricing: bool = T
     
     return "\n".join(message_lines)
 
+def process_message_async(recipient_id: str, user_text: str):
+    """Background task for heavy processing (DB + Gemini)"""
+    with app.app_context():  # Required for Flask context in threads
+        try:
+            logger.info(f"Starting async processing for {recipient_id}: {user_text[:50]}")
+
+            # === Copy ALL your existing processing logic here ===
+            # Check for quote/cart commands first
+            quote_response = handle_quote_command(recipient_id, user_text)
+            if quote_response:
+                send_whatsapp_message(recipient_id, quote_response)
+                return
+
+            # Detect intent
+            intent = detect_intent(user_text)
+            logger.info(f"Detected intent: {intent['type']}")
+
+            response_text = ""
+
+            if intent["type"] == "greeting":
+                response_text = handle_greeting()
+
+            elif intent["type"] == "simple_search":
+                response_text, _ = handle_simple_search(user_text)
+
+            elif intent["type"] == "price_check":
+                response_text = handle_price_check(user_text)
+
+            elif intent["type"] == "complex_query":
+                response_text = handle_complex_query(user_text)
+
+            else:
+                response_text = handle_complex_query(user_text)  # fallback
+
+            # Send the final response
+            if response_text:
+                success = send_whatsapp_message(recipient_id, response_text)
+                if not success:
+                    fallback = "Sorry, I'm having trouble responding right now. Please try again shortly."
+                    send_whatsapp_message(recipient_id, fallback)
+            else:
+                send_whatsapp_message(recipient_id, "I didn't understand that. Type 'HELP' for options.")
+
+        except Exception as e:
+            logger.error(f"Error in async processing: {e}")
+            send_whatsapp_message(recipient_id, "I'm experiencing technical issues. Please try again later.")
+
 # --- RECOMMENDATION HOOKS (From Bot 1) ---
 def get_recommendations(product_id: str) -> Dict[str, List[str]]:
     """
