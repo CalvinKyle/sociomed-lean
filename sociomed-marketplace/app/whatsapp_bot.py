@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional, Any
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
+from recommendation_engine import get_recommendations
 import uuid
 import threading
 from functools import wraps
@@ -342,48 +343,6 @@ def process_message_async(recipient_id: str, user_text: str):
         except Exception as e:
             logger.error(f"Error in async processing: {e}")
             send_whatsapp_message(recipient_id, "I'm experiencing technical issues. Please try again later.")
-
-# --- RECOMMENDATION HOOKS (From Bot 1) ---
-def get_recommendations(product_id: str) -> Dict[str, List[str]]:
-    """
-    Mock recommendation engine (integrate with actual module from Bot 1)
-    In production, replace with: from recommendation_engine import get_recommendations
-    """
-    # This is a mock - replace with actual implementation
-    try:
-        # Example mock recommendations based on product category
-        recommendations = {
-            'consumables': [],
-            'accessories': [],
-            'related': []
-        }
-        
-        # For demo purposes - in reality, call the actual recommendation engine
-        # recs = actual_recommendation_engine.get_recommendations(product_id)
-        # return recs or recommendations
-        
-        return recommendations
-        
-    except Exception as e:
-        logger.warning(f"Could not fetch recommendations: {e}")
-        return {'consumables': [], 'accessories': [], 'related': []}
-
-def add_recommendations_to_response(response_text: str, product_ids: List[str]) -> str:
-    """Add accessory recommendations to response (from Bot 1)"""
-    try:
-        for pid in product_ids:
-            recs = get_recommendations(pid)
-            if recs and recs.get('consumables'):
-                response_text += f"\n\n🔗 *Recommended accessories:*\n"
-                for item in recs['consumables'][:3]:  # Limit to 3
-                    response_text += f"• {item}\n"
-                # Add suggestion from Bot 1
-                response_text += f"\n_💡 Don't forget these essential items!_"
-                break  # Just for first product
-    except Exception as e:
-        logger.warning(f"Could not add recommendations: {e}")
-    
-    return response_text
 
 # --- AI FUNCTIONS WITH MASTER DB VALIDATION ---
 def generate_ai_response_with_context(user_query: str, master_db_results: List[Dict]) -> Tuple[str, bool]:
