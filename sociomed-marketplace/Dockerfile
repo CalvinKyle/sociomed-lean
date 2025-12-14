@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir \
 COPY app/ /app/
 
 # Expose Flask port
-EXPOSE 5000
+EXPOSE 5001
 
 # Run the WhatsApp bot with unbuffered output (better logs)
 CMD ["python", "-u", "/app/whatsapp_bot.py"]
