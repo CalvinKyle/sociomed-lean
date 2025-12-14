@@ -1,0 +1,14 @@
+sociomed-marketplace/
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+├── data/
+│   ├── inputs/                  # Place your PDFs (Pricelists, Catalogues) here
+│   └── outputs/                 # Generated quotes go here
+├── db/
+│   └── marketplace_schema.sql   # Database initialization
+└── src/
+    ├── etl_ingest.py            # PDF -> Gemini -> DB Pipeline
+    ├── whatsapp_bot.py          # Flask Webhook & Logic
+    ├── generate_quote.py        # PDF Generation Logic
+    └── recommendation_engine.py # Cross-sell/Upsell Logic

@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  sociomed-database:
+    image: postgres:15-alpine
+    container_name: sociomed-db
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      # RESTORED: This creates your tables automatically
+      - ./db/marketplace_schema.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  sociomed-app:
+    build: .
+    container_name: sociomed-app
+    depends_on:
+      - sociomed-database
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+    # Simplest way to pass ALL variables from .env (including API Keys)
+    env_file:
+      - .env
+    ports:
+      - "5001:5000"
+    command: tail -f /dev/null
+
+volumes:
+  pg_data:

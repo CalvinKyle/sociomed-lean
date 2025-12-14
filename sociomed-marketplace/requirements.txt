@@ -1,0 +1,11 @@
+pandas
+sqlalchemy
+psycopg2-binary
+flask
+requests
+fpdf2
+beautifulsoup4
+pypdf
+google-generativeai
+python-dotenv
+openpyxl        
