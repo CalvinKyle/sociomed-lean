@@ -50,41 +50,75 @@ if GEMINI_API_KEY:
 
 # --- USER & CART MANAGEMENT (From Bot 2) ---
 class UserCartManager:
-    """Manages user sessions and shopping carts"""
-    def __init__(self, session_timeout_minutes=30):
+    """Manages user sessions and shopping carts with disk persistence"""
+    def __init__(self, session_timeout_minutes=30, persistence_file="/data/cart_state.json"):
+        self.persistence_file = persistence_file
+        self.session_timeout = timedelta(minutes=session_timeout_minutes)
         self.user_carts = defaultdict(list)  # phone -> list of cart items
         self.user_sessions = {}  # phone -> {'last_activity': datetime, 'state': str}
-        self.session_timeout = timedelta(minutes=session_timeout_minutes)
-    
+        self._load_state()  # Load from disk on startup
+
+    def _save_state(self):
+        """Persist carts and sessions to disk"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.persistence_file), exist_ok=True)
+            data = {
+                "carts": dict(self.user_carts),  # Convert defaultdict to dict
+                "sessions": {
+                    phone: {
+                        'last_activity': session['last_activity'].isoformat(),
+                        'state': session['state']
+                    } for phone, session in self.user_sessions.items()
+                }
+            }
+            with open(self.persistence_file, 'w') as f:
+                json.dump(data, f)
+            logger.info("Cart state saved to disk")
+        except Exception as e:
+            logger.error(f"Failed to save cart state: {e}")
+
+    def _load_state(self):
+        """Load carts and sessions from disk"""
+        if os.path.exists(self.persistence_file):
+            try:
+                with open(self.persistence_file, 'r') as f:
+                    data = json.load(f)
+                    self.user_carts = defaultdict(list, data.get("carts", {}))
+                    for phone, session_data in data.get("sessions", {}).items():
+                        self.user_sessions[phone] = {
+                            'last_activity': datetime.fromisoformat(session_data['last_activity']),
+                            'state': session_data['state']
+                        }
+                logger.info("Cart state loaded from disk")
+            except Exception as e:
+                logger.error(f"Failed to load cart state: {e}")
+
     def _clean_old_sessions(self):
-        """Remove expired sessions"""
+        """Remove expired sessions and save"""
         now = datetime.utcnow()
-        expired_users = [
-            phone for phone, session in self.user_sessions.items()
-            if now - session['last_activity'] > self.session_timeout
-        ]
-        for phone in expired_users:
+        expired = [phone for phone, session in self.user_sessions.items()
+                   if now - session['last_activity'] > self.session_timeout]
+        for phone in expired:
             self.clear_cart(phone)
             del self.user_sessions[phone]
             logger.info(f"Cleared expired session for {phone}")
-    
+
     def get_user_state(self, phone: str) -> str:
-        """Get current user conversation state"""
         self._clean_old_sessions()
         if phone not in self.user_sessions:
             return "NEW"
         return self.user_sessions[phone].get('state', 'SEARCHING')
-    
+
     def update_user_state(self, phone: str, state: str):
-        """Update user conversation state"""
         self.user_sessions[phone] = {
             'last_activity': datetime.utcnow(),
             'state': state
         }
-    
-    def add_to_cart(self, phone: str, product_id: str, product_name: str, 
+        self._save_state()  # Save on update
+
+    def add_to_cart(self, phone: str, product_id: str, product_name: str,
                    price: float, quantity: int = 1, notes: str = "") -> str:
-        """Add item to user's cart"""
         item_id = str(uuid.uuid4())[:8]
         item = {
             'item_id': item_id,
@@ -98,45 +132,40 @@ class UserCartManager:
         self.user_carts[phone].append(item)
         self.update_user_state(phone, "CART_ACTIVE")
         logger.info(f"Added item {item_id} to cart for {phone}")
+        self._save_state()  # Persist immediately
         return item_id
-    
+
     def remove_from_cart(self, phone: str, item_id: str) -> bool:
-        """Remove item from cart"""
         cart = self.user_carts.get(phone, [])
         for i, item in enumerate(cart):
             if item['item_id'] == item_id:
                 cart.pop(i)
                 logger.info(f"Removed item {item_id} from cart for {phone}")
+                self._save_state()
                 return True
         return False
-    
-    def get_cart(self, phone: str) -> List[Dict]:
-        """Get user's cart items"""
-        return self.user_carts.get(phone, [])
-    
-    def get_cart_summary(self, phone: str) -> Dict[str, Any]:
-        """Get cart summary with totals"""
-        cart = self.get_cart(phone)
-        if not cart:
-            return {"item_count": 0, "total": 0.0, "items": []}
-        
-        total = sum(item['price'] * item['quantity'] for item in cart)
-        return {
-            "item_count": len(cart),
-            "total": total,
-            "items": cart
-        }
-    
+
     def clear_cart(self, phone: str):
-        """Clear user's cart"""
         if phone in self.user_carts:
             self.user_carts[phone] = []
             logger.info(f"Cleared cart for {phone}")
-    
+            self._save_state()
+
+    def get_cart(self, phone: str) -> List[Dict]:
+        return self.user_carts.get(phone, [])
+
+    def get_cart_summary(self, phone: str) -> Dict[str, Any]:
+        cart = self.get_cart(phone)
+        if not cart:
+            return {"item_count": 0, "total": 0.0, "items": []}
+        total = sum(item['price'] * item['quantity'] for item in cart)
+        return {"item_count": len(cart), "total": total, "items": cart}
+
     def is_cart_empty(self, phone: str) -> bool:
-        """Check if cart is empty"""
         return len(self.user_carts.get(phone, [])) == 0
 
+
+# Global instance (used across webhook calls)
 cart_manager = UserCartManager()
 
 # --- DATABASE FUNCTIONS ---
