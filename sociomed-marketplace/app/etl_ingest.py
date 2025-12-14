@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Enhanced ETL Ingestion Pipeline for Medical Equipment Catalogs
-Combines features from both scripts for optimal performance and reliability
-"""
-
 import os
 import glob
 import json
@@ -22,7 +17,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from pypdf import PdfReader
 
 # -------------------------- CONFIGURATION --------------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sociomed_user:s3cr3tpass@sociomed-database:5432/sociomed")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is NOT set.")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MAX_PDF_SIZE_DIRECT_UPLOAD = 10 * 1024 * 1024  # 10MB (Gemini's limit for file upload)
 MAX_TEXT_LENGTH_DIRECT_PROCESSING = 15000  # Characters
