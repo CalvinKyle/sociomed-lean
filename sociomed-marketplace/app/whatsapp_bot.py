@@ -115,7 +115,7 @@ class RedisCartManager:
 cart_manager = RedisCartManager()
 
 # --- DATABASE SEARCH & DEMAND LOGGING ---
-def search_master_database(query: str, limit: int = 5):
+def search_master_database(query: str, limit: int = 5, user_phone: str = None):
     if not gemini_model or not engine:
         return [], False
 
@@ -128,23 +128,47 @@ def search_master_database(query: str, limit: int = 5):
         )['embedding']
 
         with engine.connect() as conn:
+            # UPDATED QUERY: Uses inventory schema & maps new columns
             sql = text("""
                 SELECT 
                     p.product_id, p.name, p.manufacturer, p.brand,
                     p.short_description, p.full_description, p.category, p.sku,
                     o.price, o.currency, s.name as supplier_name,
-                    CASE WHEN o.in_stock THEN 'In Stock' ELSE 'Order on Demand' END as stock_status
-                FROM products p
-                JOIN product_offerings o ON p.product_id = o.product_id
-                LEFT JOIN suppliers s ON o.supplier_id = s.supplier_id
+                    o.lead_time_days,
+                    CASE 
+                        WHEN o.quantity_available > 0 THEN 'IN_STOCK' 
+                        ELSE 'ORDER_ON_DEMAND' 
+                    END as availability,
+                    COALESCE(o.quantity_available, 0) as stock_qty
+                FROM inventory.products p
+                JOIN inventory.product_offerings o ON p.product_id = o.product_id
+                LEFT JOIN inventory.suppliers s ON o.supplier_id = s.supplier_id
                 WHERE p.embedding IS NOT NULL
                 ORDER BY p.embedding <-> :query_emb
                 LIMIT :limit
             """)
-            results = conn.execute(sql, {"query_emb": query_emb, "limit": limit}).fetchall()
             
-            # Format results same as before...
-            # (keep your existing product_dict formatting)
+            # Cast embedding to string if using pgvector with sqlalchemy text parameters sometimes requires it, 
+            # but usually passing the list works. If it fails, use str(query_emb)
+            results = conn.execute(sql, {"query_emb": str(query_emb), "limit": limit}).fetchall()
+            
+            # Convert to List[Dict]
+            product_list = []
+            for row in results:
+                product_list.append({
+                    "product_id": row.product_id,
+                    "name": row.name,
+                    "manufacturer": row.manufacturer or row.brand,
+                    "price": float(row.price) if row.price else 0.0,
+                    "currency": row.currency,
+                    "availability": row.availability,
+                    "stock_qty": row.stock_qty,
+                    "lead_time": row.lead_time_days or 7, # Default fallback
+                    "sku": row.sku
+                })
+            
+            return product_list, len(product_list) > 0
+            
     except Exception as e:
         logger.error(f"Vector search error: {e}")
         return [], False
