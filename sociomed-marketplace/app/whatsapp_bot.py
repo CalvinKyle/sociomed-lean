@@ -214,29 +214,66 @@ def add_recommendations_to_response(response_text: str, product_ids: List[str]) 
     return response_text
 
 def create_product_list_payload(products: List[Dict]) -> Dict:
-    """Generates a WhatsApp Interactive List Message payload"""
+    """Generates a WhatsApp List with Products AND Custom Action Buttons"""
+    # --- SECTION 1: QUICK ACTIONS (Your Confirmed Options) ---
+    # We define these first to ensure they always appear
+    action_rows = [
+        {
+            "id": "CMD_CART",
+            "title": "🛒 View Cart",
+            "description": "See items currently in your basket"
+        },
+        {
+            "id": "CMD_QUOTE",
+            "title": "📄 Generate Quote",
+            "description": "Create PDF quote from cart"
+        },
+        {
+            "id": "CMD_RECOMMEND",
+            "title": "💡 Recommendations",
+            "description": "View suggested items"
+        },
+        {
+            "id": "CMD_CATALOG",
+            "title": "📚 Download Catalog",
+            "description": "Get full price list PDF"
+        },
+        {
+            "id": "CMD_SUPPORT",
+            "title": "📞 Contact Support",
+            "description": "Chat with a human agent"
+        },
+        {
+            "id": "CMD_CLEAR",
+            "title": "❌ Clear Cart",
+            "description": "Empty your basket"
+        }
+    ]
+
+    # --- SECTION 2: PRODUCTS (Search Results) ---
+    # WhatsApp Limit: Max 10 items TOTAL.
+    # We have 6 actions, so we can show max 4 products.
+    product_rows = []
+    max_products = 10 - len(action_rows) # Dynamically calculate remaining slots
     
-    # WhatsApp Limit: Max 10 items per list section
-    limited_products = products[:10]
-    
-    rows = []
-    for p in limited_products:
-        # WhatsApp Strict Limits: Title max 24 chars, Desc max 72 chars
-        clean_title = p['name'][:23]  # Truncate to safe length
+    for p in products[:max_products]:
+        # Customize view: Brand | Stock
+        stock_qty = p.get('stock_qty', 0)
+        brand = p.get('manufacturer', 'Generic')[:15] 
         
-        # We store the command "ADD [ID]" in the invisible ID field
-        # So when they click it, the bot receives "ADD product_123"
+        # ID format: "ADD {id}" -> Triggers add-to-cart logic
         row_id = f"ADD {p['product_id']}"
+        title = p['name'][:23] # Max 24 chars
         
-        # Format price for the description
+        # Description: "Brand | 50 in stock | 5,000 UGX"
         currency = p.get('currency', 'UGX')
         price_str = f"{currency} {p['price']:,.0f}"
-        description = f"{price_str} | {p['availability']}"[:72]
+        desc = f"{brand} | Stock: {stock_qty} | {price_str}"[:72]
 
-        rows.append({
+        product_rows.append({
             "id": row_id, 
-            "title": clean_title,
-            "description": description
+            "title": title,
+            "description": desc
         })
 
     return {
@@ -245,20 +282,24 @@ def create_product_list_payload(products: List[Dict]) -> Dict:
             "type": "list",
             "header": {
                 "type": "text",
-                "text": "Search Results"
-            },
-            "body": {
-                "text": f"Found {len(products)} items. Tap 'View Items' to select."
-            },
-            "footer": {
                 "text": "SocioMed Marketplace"
             },
+            "body": {
+                "text": f"Found matching items.\nSelect an item to ADD to cart, or choose an action below."
+            },
+            "footer": {
+                "text": "Tap 'Menu' to start"
+            },
             "action": {
-                "button": "View Items",
+                "button": "Open Menu",
                 "sections": [
                     {
-                        "title": "Available Products",
-                        "rows": rows
+                        "title": "📦 Available Products",
+                        "rows": product_rows
+                    },
+                    {
+                        "title": "⚡ Quick Actions",
+                        "rows": action_rows
                     }
                 ]
             }
@@ -402,7 +443,50 @@ def webhook():
 
                         # Now process 'user_text' as if the user typed it manually
                         if user_text:
-                            # 1. Check Quote Commands (ADD, CART, etc.)
+                            if user_text == "CMD_CART":
+                                user_text = "cart" 
+                                
+                            elif user_text == "CMD_QUOTE":
+                                user_text = "request quote"
+                                
+                            elif user_text == "CMD_CLEAR":
+                                cart_manager.clear_cart(recipient_id)
+                                send_whatsapp_message(recipient_id, "✅ Cart has been cleared.")
+                                continue # Stop processing
+                                
+                            elif user_text == "CMD_SUPPORT":
+                                msg = (
+                                    "📞 *Contact Support*\n\n"
+                                    "You can reach our agent at: +256 777411435\n"
+                                    "Or email us: info@socio-med.com\n"
+                                    "Working Hours: Mon-Fri, 8am - 5pm"
+                                )
+                                send_whatsapp_message(recipient_id, msg)
+                                continue
+                                
+                            elif user_text == "CMD_CATALOG":
+                                # Construct a Document Message Payload
+                                doc_payload = {
+                                    "type": "document",
+                                    "document": {
+                                        # REPLACE with your actual hosted PDF link
+                                        "link": "https://www.socio-med.com/files/2026_Catalog.pdf",
+                                        "caption": "📚 SocioMed 2026 General Catalog.pdf",
+                                        "filename": "SocioMed_Catalog.pdf"
+                                    }
+                                }
+                                send_whatsapp_message(recipient_id, doc_payload)
+                                continue
+
+                            elif user_text == "CMD_RECOMMEND":
+                                # Placeholder for recommendation logic
+                                send_whatsapp_message(recipient_id, "💡 Based on your search, we recommend checking out: [Gloves], [Syringes].")
+                                continue
+
+                            # -----------------------------------------------------
+                            # 2. STANDARD COMMANDS & SEARCH
+                            # -----------------------------------------------------
+                            # Check Quote Commands (ADD, CART, etc.)
                             quote_resp = handle_quote_command(recipient_id, user_text)
                             if quote_resp:
                                 send_whatsapp_message(recipient_id, quote_resp)
