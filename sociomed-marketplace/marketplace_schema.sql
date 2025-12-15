@@ -38,10 +38,19 @@ CREATE TABLE products (
     product_id SERIAL PRIMARY KEY,
     sku VARCHAR(100) UNIQUE NOT NULL, 
     name VARCHAR(500) NOT NULL,
-    short_description VARCHAR(500), 
     brand VARCHAR(200),
     manufacturer VARCHAR(200), 
-    category VARCHAR(200), 
+    
+    -- ENHANCEMENT 1: STRICT CATEGORIES
+    category VARCHAR(50) CHECK (category IN (
+        'medical equipment', 
+        'devices', 
+        'consumables', 
+        'surgical instruments', 
+        'reagents',
+        'general' -- Fallback
+    )),
+    
     subcategory VARCHAR(200), 
     description TEXT, 
     unit_of_measure VARCHAR(50) DEFAULT 'UNIT', 
@@ -52,12 +61,29 @@ CREATE TABLE products (
     
     -- Technical Data
     specifications JSONB, 
-    regulatory_info JSONB, 
-    manual_url TEXT, 
-    image_url TEXT, 
     
-    is_high_value BOOLEAN DEFAULT FALSE, 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -- ENHANCEMENT 2: UPSELL HINTS (Stores raw text like "Use with Catheter X")
+    upsell_hints TEXT, 
+    
+    -- ENHANCEMENT 3: DATA GOVERNANCE (The Logic Engine)
+    data_source VARCHAR(50), -- e.g., 'INVENTORY_EXCEL', 'GEMINI_PDF'
+    trust_score INT DEFAULT 0, -- 100 = Excel (Verified), 10 = PDF (AI Guess)
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    
+    -- ENHANCEMENT 4: TRIGGER TO UPDATE TIMESTAMP
+	CREATE OR REPLACE FUNCTION update_timestamp()
+	RETURNS TRIGGER AS $$
+	BEGIN
+		NEW.updated_at = NOW();
+		RETURN NEW;
+	END;
+	$$ LANGUAGE plpgsql;
+
+	CREATE TRIGGER trg_products_timestamp
+	BEFORE UPDATE ON products
+	FOR EACH ROW EXECUTE FUNCTION update_timestamp()
 );
 
 -- 4. PRODUCT RELATIONSHIPS
@@ -288,3 +314,4 @@ INSERT INTO product_offerings (product_id, supplier_id, price, quantity_on_hand,
 -- If you buy 50+ catheters, price drops to 150,000 UGX
 INSERT INTO price_tiers (offering_id, min_quantity, unit_price) VALUES
 ((SELECT offering_id FROM product_offerings WHERE product_id=1 LIMIT 1), 50, 150000.00);
+
