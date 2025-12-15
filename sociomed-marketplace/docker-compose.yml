@@ -32,6 +32,16 @@ services:
     ports:
       - "5001:5000"                         # Direct mapping
     command: python -u /app/whatsapp_bot.py # Actually runs your bot
+    
+  redis:
+    image: redis:alpine
+    container_name: sociomed-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"          # Only for testing — you can remove later
+    volumes:
+      - redis_data:/data     # Saves data even if container restarts
 
 volumes:
   pg_data:
+  redis_data: 
