@@ -248,49 +248,56 @@ class SocioMedETL:
             excel_source_id = conn.execute(text("SELECT source_id FROM config.data_sources WHERE source_name = 'excel_import'")).scalar() or 1
 
             # 2. PRODUCTS (Main DB) -> inventory.products
+            # FIX 1: Mapped 'description' -> 'full_description'
+            # FIX 2: Mapped 'category' -> Uppercase to match Enum likely (optional but safer)
             logger.info("   -> Transforming Products...")
             conn.execute(text("""
                 INSERT INTO inventory.products (
-                    sku, name, category, description, brand, manufacturer, 
+                    sku, name, category, full_description, brand, manufacturer, 
                     regulatory_status, upsell_hints, primary_source_id
                 )
                 SELECT DISTINCT 
                     sku, name, 
-                    COALESCE(category, 'GENERAL'), 
+                    COALESCE(UPPER(category), 'GENERAL_MEDICAL'), 
                     description, brand, manufacturer,
                     regulatory_status, upsell_hints,
                     :source_id
                 FROM stg_db_4_g
                 WHERE sku IS NOT NULL
                 ON CONFLICT (sku) DO UPDATE SET 
-                    -- Excel is High Priority (10), so we force update over PDF (50)
                     name = EXCLUDED.name,
-                    description = EXCLUDED.description,
+                    full_description = EXCLUDED.full_description,
                     primary_source_id = EXCLUDED.primary_source_id;
             """), {"source_id": excel_source_id})
 
             # 3. OFFERINGS (Price/Stock) -> inventory.product_offerings
+            # FIX 3: Added 'source_id' to INSERT (Constraint Violation Fix)
+            # FIX 4: Added 'supplier_sku' logic (Unique constraint requires product_id, supplier_id, supplier_sku)
+            #        We default supplier_sku to sku here for the internal SocioMed supplier.
             logger.info("   -> Transforming Offerings...")
             conn.execute(text("""
                 INSERT INTO inventory.product_offerings (
-                    product_id, supplier_id, price, stock_status, 
-                    min_order_quantity, lead_time_days
+                    product_id, supplier_id, supplier_sku, price, stock_status, 
+                    min_order_quantity, lead_time_days, source_id
                 )
                 SELECT 
                     p.product_id,
                     1, -- Default Supplier (SocioMed)
+                    p.sku, -- Default supplier_sku to internal SKU
                     CAST(REGEXP_REPLACE(stg.price::text, '[^0-9.]', '', 'g') AS DECIMAL),
                     stg.stock_status,
                     CAST(NULLIF(stg.min_order_quantity, '') AS INTEGER),
-                    CAST(NULLIF(stg.lead_time_days, '') AS INTEGER)
+                    CAST(NULLIF(stg.lead_time_days, '') AS INTEGER),
+                    :source_id
                 FROM stg_db_4_g stg
                 JOIN inventory.products p ON stg.sku = p.sku
                 WHERE stg.price IS NOT NULL
-                ON CONFLICT (product_id, supplier_id) DO UPDATE SET
+                ON CONFLICT (product_id, supplier_id, supplier_sku) DO UPDATE SET
                     price = EXCLUDED.price,
                     stock_status = EXCLUDED.stock_status,
-                    quantity_on_hand = CASE WHEN EXCLUDED.stock_status = 'In Stock' THEN 100 ELSE 0 END; 
-            """))
+                    quantity_on_hand = CASE WHEN EXCLUDED.stock_status = 'In Stock' THEN 100 ELSE 0 END,
+                    source_id = EXCLUDED.source_id; 
+            """), {"source_id": excel_source_id})
 
     def _table_exists(self, conn, table_name):
         return conn.execute(text(f"SELECT to_regclass('{table_name}')")).scalar() is not None
