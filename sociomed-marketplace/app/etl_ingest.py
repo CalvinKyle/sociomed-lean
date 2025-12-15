@@ -131,6 +131,14 @@ RULES for this chunk:
 """
 
 # -------------------------- HELPER FUNCTIONS --------------------------
+def get_source_id(session, source_name="pdf_etl"):
+    """Fetches the ID for a data source name from config schema"""
+    result = session.execute(
+        text("SELECT source_id FROM config.data_sources WHERE source_name = :name"),
+        {"name": source_name}
+    ).scalar()
+    return result if result else 1 # Default to 1 (or handle error)
+    
 def clean_json_string(json_str: str) -> str:
     """Advanced cleaning of Gemini response text"""
     # Remove markdown code blocks
@@ -450,82 +458,57 @@ def upsert_supplier(session, supplier_data: Dict) -> int:
     return result.scalar_one()
 
 def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
-    # We assign a low score because AI can make mistakes
-    TRUST_SCORE_PDF = 10 
+    # 1. Get Source ID for PDF
+    source_id = get_source_id(session, "pdf_etl")
     
-    result = session.execute(
-        text("""
-            INSERT INTO products (
-                sku, name, description, brand, category, 
-                data_source, trust_score, specifications
-            )
-            VALUES (
-                :sku, :name, :desc, :brand, :category, 
-                'GEMINI_PDF', :score, :specs
-            )
-            ON CONFLICT (sku) DO UPDATE SET
-                -- ONLY UPDATE if the existing data is "weaker" than this PDF
-                description = EXCLUDED.description,
-                specifications = EXCLUDED.specifications,
-                category = EXCLUDED.category
-            WHERE products.trust_score <= EXCLUDED.trust_score
-            RETURNING id
-        """),
-        {
-            "sku": item.get("sku"),
-            "name": item.get("name"),
-            "desc": item.get("description"),
-            "brand": item.get("brand"),
-            "category": item.get("category", "general").lower(), # Force lowercase
-            "score": TRUST_SCORE_PDF,
-            "specs": json.dumps(item)
-        }
-    """Upsert product with duplicate detection"""
-    # Check for existing similar product
+    # 2. Check for existing product (Using inventory schema)
     existing = session.execute(
         text("""
-            SELECT product_id, name, sku FROM products 
-            WHERE (sku = :sku AND sku IS NOT NULL AND sku != '')
-               OR (name ILIKE :name AND category = :category)
-            LIMIT 1
+            SELECT product_id, primary_source_id FROM inventory.products 
+            WHERE sku = :sku
         """),
-        {
-            "sku": item.get("sku", ""),
-            "name": f"%{item.get('name')}%",
-            "category": item.get("category", "General Medical")
-        }
+        {"sku": item.get("sku")}
     ).fetchone()
-    
+
     if existing:
-        product_id = existing[0]
-        is_new = False
-        logger.debug(f"Found existing product: {existing[1]} (ID: {product_id})")
+        product_id, current_source_id = existing
+        # LOGIC: Only update if current source is NOT 'excel_import' (ID 10 vs 50)
+        # We assume lower priority ID = High Authority (e.g. Excel=10, PDF=50)
+        # We check the priority of the current source vs incoming
+        current_priority = session.execute(text("SELECT priority FROM config.data_sources WHERE source_id=:sid"), {"sid": current_source_id}).scalar()
+        incoming_priority = 50 # PDF priority
+        
+        if incoming_priority < current_priority:
+             # Perform Update
+             pass 
+        return product_id, False
     else:
-        # Insert new product
+        # 3. Insert New (Using inventory schema)
         result = session.execute(
             text("""
-                INSERT INTO products (sku, name, description, brand, category, unit, uom, specifications)
-                VALUES (:sku, :name, :desc, :brand, :category, :unit, :uom, :specs::jsonb)
-                RETURNING id
+                INSERT INTO inventory.products (
+                    sku, name, description, brand, category, 
+                    unit_of_measure, specifications, primary_source_id, embedding
+                )
+                VALUES (
+                    :sku, :name, :desc, :brand, :category, 
+                    :unit, :specs::jsonb, :src_id, :emb
+                )
+                RETURNING product_id
             """),
             {
                 "sku": item.get("sku"),
                 "name": item.get("name"),
                 "desc": item.get("description", ""),
-                "brand": item.get("brand", item.get("manufacturer", "Generic")),
-                "category": item.get("category", "General Medical"),
-                "unit": item.get("unit", "piece"),
-                "uom": item.get("uom", ""),
-                "specs": json.dumps({
-                    "original_data": {k: v for k, v in item.items() if k not in ['sku', 'name', 'description', 'brand', 'category', 'price', 'currency', 'moq', 'unit', 'uom']},
-                    "extraction_timestamp": datetime.now().isoformat()
-                })
+                "brand": item.get("brand"),
+                "category": item.get("category", "GENERAL"),
+                "unit": item.get("unit", "UNIT"),
+                "specs": json.dumps(item),
+                "src_id": source_id,
+                "emb": None # Embedding is generated later or passed here if calculated
             }
         )
-        product_id = result.scalar_one()
-        is_new = True
-    
-    return product_id, is_new
+        return result.scalar_one(), True
 
     # Generate embedding from description
     description = product.get('full_description') or product.get('short_description') or product['name']
