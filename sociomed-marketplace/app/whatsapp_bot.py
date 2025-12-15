@@ -15,6 +15,7 @@ from collections import defaultdict
 import uuid
 from functools import wraps
 from celery import Celery
+from app.recommendation_engine import get_recommendations
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sociomed_user:password@sociomed-database:5432/sociomed")
@@ -479,7 +480,41 @@ def webhook():
                                 continue
 
                             elif user_text == "CMD_RECOMMEND":
-                                # Placeholder for recommendation logic
+                                cart_summ = cart_manager.get_cart_summary(recipient_id)
+                                if cart_summ['item_count'] == 0:
+                                    msg = "💡 *Recommendations*\n\nPlease add items to your cart first! We can then suggest accessories and consumables matching your selection."
+                                    send_whatsapp_message(recipient_id, msg)
+                                    continue
+
+                                msg_lines = ["💡 *Recommended based on your Cart:*\n"]
+                                has_recs = False
+
+                                for item in cart_summ['items'][-3:]:
+                                    # Call the separate engine script
+                                    recs = get_recommendations(engine, item['product_id'])
+                                    
+                                    if recs['consumables'] or recs['similar']:
+                                        has_recs = True
+                                        msg_lines.append(f"Because you added *{item['product_name']}*:")
+                                        
+                                        # Show consumables (High priority)
+                                        for cons in recs['consumables']:
+                                            msg_lines.append(f"  • {cons}")
+                                            
+                                        # Show similar (Low priority - only if no consumables)
+                                        if not recs['consumables']:
+                                            for sim in recs['similar']:
+                                                msg_lines.append(f"  • Compare: {sim}")
+                                        
+                                        msg_lines.append("") # Empty line
+
+                                if not has_recs:
+                                    msg = "✅ Excellent choices! We don't have any specific add-ons for these items yet."
+                                else:
+                                    msg = "\n".join(msg_lines)
+                                    # Add a footer tip
+                                    msg += "\nType *'ADD [Item Name]'* to add any of these to your order."
+                                    
                                 send_whatsapp_message(recipient_id, "💡 Based on your search, we recommend checking out: [Gloves], [Syringes].")
                                 continue
 
