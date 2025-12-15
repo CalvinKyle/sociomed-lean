@@ -42,6 +42,20 @@ services:
     volumes:
       - redis_data:/data     # Saves data even if container restarts
 
+  celery-worker:
+    build: .
+    command: celery -A whatsapp_bot.celery worker --loglevel=info
+    volumes:
+      - ./app:/app
+      - ./data:/data
+      - ./logs:/logs
+    env_file:
+      - .env
+    depends_on:
+      - sociomed-redis
+      - sociomed-database
+    restart: unless-stopped
+
 volumes:
   pg_data:
   redis_data: 
