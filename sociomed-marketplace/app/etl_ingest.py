@@ -4,6 +4,7 @@ import glob
 import json
 import re
 import time
+import google.generativeai as genai
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -494,6 +495,27 @@ def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
         is_new = True
     
     return product_id, is_new
+
+    # Generate embedding from description
+    description = product.get('full_description') or product.get('short_description') or product['name']
+    if description and gemini_model:
+        try:
+            result = genai.embed_content(
+                model="models/embedding-001",
+                content=description,
+                task_type="retrieval_document"
+            )
+            embedding = result['embedding']
+            
+            # Save to database
+            session.execute(
+                text("UPDATE products SET embedding = :emb WHERE id = :pid"),
+                {"emb": embedding, "pid": product_id}
+            )
+            session.commit()
+            logger.info(f"Created smart embedding for {product['name']}")
+        except Exception as e:
+            logger.error(f"Embedding error: {e}")
 
 def upsert_offering(session, product_id: int, supplier_id: int, item: Dict):
     """Upsert product offering with price history tracking"""
