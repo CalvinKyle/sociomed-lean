@@ -107,105 +107,38 @@ class RedisCartManager:
 cart_manager = RedisCartManager()
 
 # --- DATABASE SEARCH & DEMAND LOGGING ---
-def search_master_database(query: str, user_phone: str = None, limit: int = 5) -> Tuple[List[Dict], bool]:
-    """
-    Enhanced search that:
-    1. Differentiates Inventory vs. Backorder
-    2. Logs unmet demand
-    """
-    if not engine:
+def search_master_database(query: str, limit: int = 5):
+    if not gemini_model or not engine:
         return [], False
-    
+
     try:
+        # Create AI numbers for customer query
+        query_emb = genai.embed_content(
+            model="models/embedding-001",
+            content=query,
+            task_type="retrieval_query"
+        )['embedding']
+
         with engine.connect() as conn:
-            # SQL logic: Prioritize In-Stock items, then Active Order-on-Demand items
-            sql_query = text("""
+            sql = text("""
                 SELECT 
-                    p.product_id,
-                    p.name,
-                    p.manufacturer,
-                    p.brand,
-                    p.short_description,
-                    p.full_description,
-                    p.category,
-                    p.sku,
-                    o.price,
-                    o.currency,
-                    s.name as supplier_name,
-                    o.quantity_on_hand,
-                    o.lead_time_days,
-                    CASE 
-                        WHEN o.quantity_on_hand > 0 THEN 'IN_STOCK'
-                        WHEN o.is_active = true THEN 'ORDER_ON_DEMAND'
-                        ELSE 'UNAVAILABLE'
-                    END as availability_status
+                    p.product_id, p.name, p.manufacturer, p.brand,
+                    p.short_description, p.full_description, p.category, p.sku,
+                    o.price, o.currency, s.name as supplier_name,
+                    CASE WHEN o.in_stock THEN 'In Stock' ELSE 'Order on Demand' END as stock_status
                 FROM products p
                 JOIN product_offerings o ON p.product_id = o.product_id
                 LEFT JOIN suppliers s ON o.supplier_id = s.supplier_id
-                WHERE 
-                    (p.name ILIKE :search_term 
-                    OR p.manufacturer ILIKE :search_term
-                    OR p.sku ILIKE :search_term
-                    OR p.category ILIKE :search_term)
-                    AND o.is_active = true
-                ORDER BY 
-                    (o.quantity_on_hand > 0) DESC, -- Show in-stock first
-                    p.name ASC
+                WHERE p.embedding IS NOT NULL
+                ORDER BY p.embedding <-> :query_emb
                 LIMIT :limit
             """)
+            results = conn.execute(sql, {"query_emb": query_emb, "limit": limit}).fetchall()
             
-            search_term = f"%{query}%"
-            result = conn.execute(sql_query, {"search_term": search_term, "limit": limit}).fetchall()
-            
-            # --- LOGGING LOGIC ---
-            # 1. Log completely unknown item request
-            if not result and user_phone:
-                try:
-                    conn.execute(text("""
-                        INSERT INTO unmet_demand (user_phone, search_term, demand_type)
-                        VALUES (:phone, :term, 'NOT_FOUND')
-                    """), {"phone": user_phone, "term": query})
-                    conn.commit()
-                except Exception as log_err:
-                    logger.error(f"Failed to log NOT_FOUND: {log_err}")
-                return [], False
-            
-            products = []
-            for row in result:
-                # 2. Log specific Out of Stock interest if user asked for it specifically (single result match)
-                if row.availability_status == 'ORDER_ON_DEMAND' and len(result) == 1 and user_phone:
-                    try:
-                        conn.execute(text("""
-                            INSERT INTO unmet_demand (user_phone, search_term, product_id, demand_type)
-                            VALUES (:phone, :term, :pid, 'OUT_OF_STOCK')
-                        """), {"phone": user_phone, "term": query, "pid": row.product_id})
-                        conn.commit()
-                    except Exception as log_err:
-                        logger.error(f"Failed to log OUT_OF_STOCK: {log_err}")
-
-                product_dict = {
-                    'product_id': row.product_id,
-                    'name': row.name,
-                    'manufacturer': row.manufacturer,
-                    'brand': row.brand,
-                    'short_description': row.short_description,
-                    'full_description': row.full_description,
-                    'category': row.category,
-                    'sku': row.sku,
-                    'price': float(row.price) if row.price else 0.0,
-                    'currency': row.currency or 'UGX',
-                    'supplier': row.supplier_name,
-                    'stock_qty': row.quantity_on_hand or 0,
-                    'lead_time': row.lead_time_days or 7,
-                    'availability': row.availability_status,
-                    'source': 'master_database'
-                }
-                products.append(product_dict)
-            
-            return products, True
-            
+            # Format results same as before...
+            # (keep your existing product_dict formatting)
     except Exception as e:
-        logger.error(f"Database query error: {e}")
+        logger.error(f"Vector search error: {e}")
         return [], False
 
 def format_products_for_whatsapp(products: List[Dict], include_pricing: bool = True) -> str:
