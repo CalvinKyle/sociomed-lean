@@ -144,148 +144,107 @@ class SocioMedETL:
         return table_name
 
     def transform_to_schema(self):
-        """ Executes the complex logic to populate production tables from staging. """
         logger.info("⚙️  Running Transformations (Staging -> Production)...")
-        
         with self.engine.begin() as conn:
-            # 1. SETUP: Ensure Data Source Exists
-            conn.execute(text("""
-                INSERT INTO config.data_sources (source_name, source_type, priority, description)
-                VALUES ('excel_import', 'PRIMARY', 10, 'Main Excel Bulk Import')
-                ON CONFLICT (source_name) DO NOTHING;
-            """))
-            source_id = conn.execute(text("SELECT source_id FROM config.data_sources WHERE source_name = 'excel_import'")).scalar()
+            # 1. Get Excel Source ID (High Priority)
+            excel_source_id = conn.execute(text("SELECT source_id FROM config.data_sources WHERE source_name = 'excel_import'")).scalar() or 1
 
-            # 2. SUPPLIERS (Merge Supply Contacts & Man/Dis)
-            logger.info("   -> Merging Suppliers...")
-            # From Supply Contacts
-            if self._table_exists(conn, 'stg_supply_contacts'):
-                conn.execute(text("""
-                    INSERT INTO inventory.suppliers (
-                        name, contact_email, contact_phone, business_type, 
-                        address_line1, lead_time_days, type, data_source_id
-                    )
-                    SELECT DISTINCT
-                        name, contact_email, contact_phone, business_type, 
-                        address_line1, CAST(NULLIF(regexp_replace(lead_time_days, '[^0-9]', '', 'g'), '') AS INTEGER),
-                        'EXTERNAL', :source_id
-                    FROM stg_supply_contacts
-                    WHERE name IS NOT NULL
-                    ON CONFLICT (name) DO UPDATE SET 
-                        contact_email = EXCLUDED.contact_email,
-                        contact_phone = EXCLUDED.contact_phone;
-                """), {"source_id": source_id})
-
-            # 3. PRODUCTS (Main DB & Katsan)
+            # 2. PRODUCTS (Main DB) -> inventory.products
             logger.info("   -> Transforming Products...")
-            # From Main DB (db_4_g)
-            if self._table_exists(conn, 'stg_db_4_g'):
-                conn.execute(text("""
-                    INSERT INTO inventory.products (
-                        sku, name, category, description, brand, manufacturer, 
-                        regulatory_status, primary_source_id
-                    )
-                    SELECT DISTINCT 
-                        sku, name, 
-                        COALESCE(category, 'GENERAL_MEDICAL'), 
-                        description, brand, manufacturer,
-                        regulatory_status, :source_id
-                    FROM stg_db_4_g
-                    WHERE sku IS NOT NULL
-                    ON CONFLICT (sku) DO UPDATE SET 
-                        name = EXCLUDED.name,
-                        description = EXCLUDED.description,
-                        brand = EXCLUDED.brand;
-                """), {"source_id": source_id})
+            conn.execute(text("""
+                INSERT INTO inventory.products (
+                    sku, name, category, full_description, brand, manufacturer, 
+                    regulatory_status, upsell_hints, substitute_hints, primary_source_id
+                )
+                SELECT DISTINCT 
+                    sku, name, 
+                    COALESCE(UPPER(category), 'GENERAL_MEDICAL'), 
+                    description, brand, manufacturer,
+                    regulatory_status, upsell_hints, substitute_hints,
+                    :source_id
+                FROM stg_db_4_g
+                WHERE sku IS NOT NULL
+                ON CONFLICT (sku) DO UPDATE SET 
+                    name = EXCLUDED.name,
+                    full_description = EXCLUDED.full_description,
+                    upsell_hints = EXCLUDED.upsell_hints,
+                    substitute_hints = EXCLUDED.substitute_hints,
+                    primary_source_id = EXCLUDED.primary_source_id;
+            """), {"source_id": excel_source_id})
 
-            # From Katsan (Specialty)
-            if self._table_exists(conn, 'stg_katsan_pdts'):
-                conn.execute(text("""
-                    INSERT INTO inventory.products (sku, name, description, category, brand, primary_source_id)
-                    SELECT DISTINCT sku, name, description, category, brand, :source_id
-                    FROM stg_katsan_pdts
-                    WHERE sku IS NOT NULL
-                    ON CONFLICT (sku) DO UPDATE SET description = EXCLUDED.description;
-                """), {"source_id": source_id})
+            # 3. OFFERINGS (Price/Stock) -> inventory.product_offerings
+            logger.info("   -> Transforming Offerings...")
+            conn.execute(text("""
+                INSERT INTO inventory.product_offerings (
+                    product_id, supplier_id, supplier_sku, price, stock_status, 
+                    min_order_quantity, lead_time_days, source_id
+                )
+                SELECT 
+                    p.product_id,
+                    1, -- Default Supplier (SocioMed)
+                    p.sku,
+                    CAST(REGEXP_REPLACE(stg.price::text, '[^0-9.]', '', 'g') AS DECIMAL),
+                    stg.stock_status,
+                    CAST(NULLIF(stg.min_order_quantity, '') AS INTEGER),
+                    CAST(NULLIF(stg.lead_time_days, '') AS INTEGER),
+                    :source_id
+                FROM stg_db_4_g stg
+                JOIN inventory.products p ON stg.sku = p.sku
+                WHERE stg.price IS NOT NULL
+                ON CONFLICT (product_id, supplier_id, supplier_sku) DO UPDATE SET
+                    price = EXCLUDED.price,
+                    stock_status = EXCLUDED.stock_status,
+                    quantity_on_hand = CASE WHEN EXCLUDED.stock_status = 'In Stock' THEN 100 ELSE 0 END,
+                    source_id = EXCLUDED.source_id; 
+            """), {"source_id": excel_source_id})
 
-            # 4. CUSTOMERS / PREMISES (Sales.Users)
-            logger.info("   -> Loading Premises as Users...")
-            if self._table_exists(conn, 'stg_premises'):
-                conn.execute(text("""
-                    INSERT INTO sales.users (
-                        phone_number, full_name, organization_name, organization_type, 
-                        district, region, address, premise_no, user_type
-                    )
-                    SELECT DISTINCT 
-                        COALESCE(phone_number, 'UNKNOWN-' || premise_no), -- Ensure unique constraint isn't violated
-                        COALESCE(contact_person_name, 'Admin'),
-                        organization_name, 
-                        organization_type, 
-                        district, region, address, premise_no, 'BUYER'
-                    FROM stg_premises
-                    WHERE organization_name IS NOT NULL
-                    ON CONFLICT (phone_number) DO UPDATE SET
-                        organization_name = EXCLUDED.organization_name,
-                        district = EXCLUDED.district;
-                """))
+            # 4. RELATIONSHIPS (New Step: Linking Equipment to Consumables/Accessories)
+            logger.info("   -> Transforming Product Relationships...")
+            
+            # Logic: Split comma-separated SKUs in 'upsell_hints' (Compatible With) 
+            # and automatically detect type based on the child category.
+            conn.execute(text("""
+                INSERT INTO inventory.product_relationships (
+                    parent_product_id, child_product_id, relationship_type, source_id
+                )
+                SELECT DISTINCT
+                    p_parent.product_id,
+                    p_child.product_id,
+                    CASE 
+                        -- Auto-detect relationship type based on child category
+                        WHEN p_child.category IN ('CONSUMABLES', 'REAGENTS', 'PHARMACEUTICALS', 'DISPOSABLES') THEN 'CONSUMABLE'
+                        WHEN p_child.category IN ('ACCESSORIES', 'COMPONENTS', 'SPARE_PARTS') THEN 'ACCESSORY'
+                        ELSE 'COMPLEMENTARY'
+                    END,
+                    :source_id
+                FROM stg_db_4_g stg
+                JOIN inventory.products p_parent ON stg.sku = p_parent.sku
+                -- Split comma-separated list into rows
+                CROSS JOIN LATERAL regexp_split_to_table(stg.upsell_hints, ',\\s*') AS related_sku
+                JOIN inventory.products p_child ON p_child.sku = related_sku
+                WHERE stg.upsell_hints IS NOT NULL
+                ON CONFLICT (parent_product_id, child_product_id, relationship_type) DO NOTHING;
+            """), {"source_id": excel_source_id})
 
-            # 5. PRODUCT OFFERINGS (Prices & Stock)
-            logger.info("   -> Updating Prices & Inventory...")
-            if self._table_exists(conn, 'stg_db_4_g'):
-                # Ensure local SocioMed supplier exists
-                socio_id = conn.execute(text("SELECT supplier_id FROM inventory.suppliers WHERE type='SOCIO_MED' LIMIT 1")).scalar() or 1
-                
-                conn.execute(text("""
-                    INSERT INTO inventory.product_offerings (
-                        product_id, supplier_id, price, stock_status, 
-                        min_order_quantity, lead_time_days, source_id
-                    )
-                    SELECT 
-                        p.product_id,
-                        :supplier_id,
-                        CAST(NULLIF(regexp_replace(stg.price, '[^0-9.]', '', 'g'), '') AS DECIMAL),
-                        CASE 
-                            WHEN stg.stock_status ILIKE '%%Inventory%%' THEN 'IN_STOCK'
-                            ELSE 'OUT_OF_STOCK'
-                        END,
-                        CAST(NULLIF(regexp_replace(stg.min_order_quantity, '[^0-9]', '', 'g'), '') AS INTEGER),
-                        CAST(NULLIF(regexp_replace(stg.lead_time_days, '[^0-9]', '', 'g'), '') AS INTEGER),
-                        :source_id
-                    FROM stg_db_4_g stg
-                    JOIN inventory.products p ON stg.sku = p.sku
-                    WHERE stg.price IS NOT NULL
-                    ON CONFLICT (product_id, supplier_id) DO UPDATE SET
-                        price = EXCLUDED.price,
-                        stock_status = EXCLUDED.stock_status,
-                        quantity_on_hand = CASE WHEN EXCLUDED.stock_status = 'IN_STOCK' THEN 50 ELSE 0 END;
-                """), {"supplier_id": socio_id, "source_id": source_id})
-
-            # 6. BUNDLES & KITS
-            logger.info("   -> Creating Bundles...")
-            if self._table_exists(conn, 'stg_bund_kits'):
-                # Create Bundle Headers
-                conn.execute(text("""
-                    INSERT INTO inventory.bundles (bundle_code, name, source_id)
-                    SELECT DISTINCT kit_code, name, :source_id
-                    FROM stg_bund_kits
-                    WHERE kit_code IS NOT NULL
-                    ON CONFLICT (bundle_code) DO NOTHING;
-                """), {"source_id": source_id})
-
-                # Create Bundle Items
-                conn.execute(text("""
-                    INSERT INTO inventory.bundle_items (bundle_id, product_id, quantity, discount_override)
-                    SELECT DISTINCT 
-                        b.bundle_id, 
-                        p.product_id, 
-                        CAST(NULLIF(k.quantity, '') AS INTEGER),
-                        CAST(NULLIF(regexp_replace(k.discount_percent, '[^0-9.]', '', 'g'), '') AS DECIMAL)
-                    FROM stg_bund_kits k
-                    JOIN inventory.bundles b ON k.kit_code = b.bundle_code
-                    JOIN inventory.products p ON k.component_sku = p.sku
-                    ON CONFLICT (bundle_id, product_id) DO NOTHING;
-                """))
-
+            # 5. SUBSTITUTES (From 'Substitute Item' column)
+            logger.info("   -> Transforming Substitutes...")
+            conn.execute(text("""
+                INSERT INTO inventory.product_relationships (
+                    parent_product_id, child_product_id, relationship_type, source_id
+                )
+                SELECT DISTINCT
+                    p_parent.product_id,
+                    p_child.product_id,
+                    'SUBSTITUTE',
+                    :source_id
+                FROM stg_db_4_g stg
+                JOIN inventory.products p_parent ON stg.sku = p_parent.sku
+                CROSS JOIN LATERAL regexp_split_to_table(stg.substitute_hints, ',\\s*') AS related_sku
+                JOIN inventory.products p_child ON p_child.sku = related_sku
+                WHERE stg.substitute_hints IS NOT NULL
+                ON CONFLICT (parent_product_id, child_product_id, relationship_type) DO NOTHING;
+            """), {"source_id": excel_source_id})
+            
     def _table_exists(self, conn, table_name):
         return conn.execute(text(f"SELECT to_regclass('{table_name}')")).scalar() is not None
 
