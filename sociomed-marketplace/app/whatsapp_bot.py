@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import csv
+import redis
 import io
 from flask import Flask, request, jsonify, Response
 from sqlalchemy import create_engine, text
@@ -50,65 +51,60 @@ if GEMINI_API_KEY:
     except Exception as e:
         logger.error(f"Error initializing Gemini AI: {e}")
 
+# --- REDIS CONNECTION (FOR PERSISTENT CARTS) ---
+try:
+    redis_client = redis.Redis(host='sociomed-redis', port=6379, db=0, decode_responses=True)
+    redis_client.ping()  # Test connection
+    logger.info("Redis connected successfully for persistent carts")
+except Exception as e:
+    logger.error(f"Redis connection failed: {e}")
+    redis_client = None  # Fallback gracefully
+    
 # --- USER & CART MANAGEMENT ---
-class UserCartManager:
-    """Manages user sessions and shopping carts"""
-    def __init__(self, session_timeout_minutes=30):
-        self.user_carts = defaultdict(list)
-        self.user_sessions = {}
-        self.session_timeout = timedelta(minutes=session_timeout_minutes)
+class RedisCartManager:
+    """Shopping cart that survives restarts using Redis"""
     
-    def _clean_old_sessions(self):
-        now = datetime.utcnow()
-        expired_users = [
-            phone for phone, session in self.user_sessions.items()
-            if now - session['last_activity'] > self.session_timeout
-        ]
-        for phone in expired_users:
-            self.clear_cart(phone)
-            del self.user_sessions[phone]
-    
-    def add_to_cart(self, phone: str, product_id: str, product_name: str, 
-                   price: float, quantity: int = 1, notes: str = "") -> str:
-        item_id = str(uuid.uuid4())[:8]
+    def add_to_cart(self, phone: str, product_id: str, product_name: str, price: float, quantity: int = 1):
+        key = f"cart:{phone}"
         item = {
-            'item_id': item_id,
-            'product_id': product_id,
-            'product_name': product_name,
-            'price': price,
-            'quantity': quantity,
-            'added_at': datetime.utcnow().isoformat(),
-            'notes': notes
+            "product_id": product_id,
+            "product_name": product_name,
+            "price": price,
+            "quantity": quantity,
+            "added_at": datetime.utcnow().isoformat()
         }
-        self.user_carts[phone].append(item)
-        self.user_sessions[phone] = {'last_activity': datetime.utcnow(), 'state': 'CART_ACTIVE'}
-        return item_id
-    
-    def remove_from_cart(self, phone: str, item_id: str) -> bool:
-        cart = self.user_carts.get(phone, [])
-        for i, item in enumerate(cart):
-            if item['item_id'] == item_id:
-                cart.pop(i)
-                return True
-        return False
-    
-    def get_cart_summary(self, phone: str) -> Dict[str, Any]:
-        cart = self.user_carts.get(phone, [])
-        if not cart:
-            return {"item_count": 0, "total": 0.0, "items": []}
-        
-        total = sum(item['price'] * item['quantity'] for item in cart)
-        return {
-            "item_count": len(cart),
-            "total": total,
-            "items": cart
-        }
-    
-    def clear_cart(self, phone: str):
-        if phone in self.user_carts:
-            self.user_carts[phone] = []
+        redis_client.rpush(key, json.dumps(item))
+        redis_client.expire(key, 86400)  # Cart expires after 24 hours
+        logger.info(f"Added {product_name} to cart for {phone}")
 
-cart_manager = UserCartManager()
+    def get_cart(self, phone: str):
+        key = f"cart:{phone}"
+        items_raw = redis_client.lrange(key, 0, -1)
+        return [json.loads(item) for item in items_raw]
+
+    def get_cart_summary(self, phone: str):
+        items = self.get_cart(phone)
+        if not items:
+            return {"item_count": 0, "total": 0.0, "items": []}
+        total = sum(item['price'] * item['quantity'] for item in items)
+        return {
+            "item_count": len(items),
+            "total": total,
+            "items": items
+        }
+
+    def clear_cart(self, phone: str):
+        redis_client.delete(f"cart:{phone}")
+        logger.info(f"Cleared cart for {phone}")
+
+    def remove_from_cart(self, phone: str, item_index: int):
+        """Remove item by position (0-based)"""
+        key = f"cart:{phone}"
+        redis_client.lrem(key, 1, redis_client.lindex(key, item_index))
+        redis_client.expire(key, 86400)
+
+# Use the new persistent cart
+cart_manager = RedisCartManager()
 
 # --- DATABASE SEARCH & DEMAND LOGGING ---
 def search_master_database(query: str, user_phone: str = None, limit: int = 5) -> Tuple[List[Dict], bool]:
