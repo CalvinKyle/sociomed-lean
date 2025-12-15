@@ -8,4 +8,5 @@ beautifulsoup4
 pypdf
 google-generativeai
 python-dotenv
-openpyxl        
+openpyxl
+celery==5.4.0        

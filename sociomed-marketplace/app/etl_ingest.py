@@ -4,6 +4,7 @@ import glob
 import json
 import re
 import time
+import google.generativeai as genai
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -96,10 +97,11 @@ Extract structured data and return ONLY valid JSON matching this exact schema:
 STRICT RULES:
 1. Extract ALL products you find, even if some fields are incomplete
 2. If price is missing or unreadable → set price to 0 and add note in description
-3. Preserve original currency when shown, convert to USD only if explicitly stated
+3. Convert price to UGX 
 4. Infer supplier name from filename if not clear in document
-5. For medical equipment: include size, dimensions, material when available
-6. Return ONLY JSON, no markdown, no explanations
+5. STRICTLY categorize items into ONLY these categories: medical equipment, devices, consumables, surgical instruments, reagents. If unsure, use 'general'. Do NOT invent new categories.
+6. For medical equipment: include size, dimensions, material when available
+7. Return ONLY JSON, no markdown, no explanations
 """
 
 EXTRACTION_PROMPT_CHUNKED = """
@@ -210,7 +212,7 @@ def infer_supplier_from_filename(filename: str) -> Tuple[str, Optional[str]]:
     
     return supplier_name, supplier_code
 
-def convert_currency(amount: float, from_currency: str, to_currency: str = "USD") -> Optional[float]:
+def convert_currency(amount: float, from_currency: str, to_currency: str = "UGX") -> Optional[float]:
     """Simple currency conversion (in production, use real API)"""
     # Hardcoded rates for demo - in production use API like exchangerate-api.com
     conversion_rates = {
@@ -448,6 +450,36 @@ def upsert_supplier(session, supplier_data: Dict) -> int:
     return result.scalar_one()
 
 def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
+    # We assign a low score because AI can make mistakes
+    TRUST_SCORE_PDF = 10 
+    
+    result = session.execute(
+        text("""
+            INSERT INTO products (
+                sku, name, description, brand, category, 
+                data_source, trust_score, specifications
+            )
+            VALUES (
+                :sku, :name, :desc, :brand, :category, 
+                'GEMINI_PDF', :score, :specs
+            )
+            ON CONFLICT (sku) DO UPDATE SET
+                -- ONLY UPDATE if the existing data is "weaker" than this PDF
+                description = EXCLUDED.description,
+                specifications = EXCLUDED.specifications,
+                category = EXCLUDED.category
+            WHERE products.trust_score <= EXCLUDED.trust_score
+            RETURNING id
+        """),
+        {
+            "sku": item.get("sku"),
+            "name": item.get("name"),
+            "desc": item.get("description"),
+            "brand": item.get("brand"),
+            "category": item.get("category", "general").lower(), # Force lowercase
+            "score": TRUST_SCORE_PDF,
+            "specs": json.dumps(item)
+        }
     """Upsert product with duplicate detection"""
     # Check for existing similar product
     existing = session.execute(
@@ -494,6 +526,27 @@ def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
         is_new = True
     
     return product_id, is_new
+
+    # Generate embedding from description
+    description = product.get('full_description') or product.get('short_description') or product['name']
+    if description and gemini_model:
+        try:
+            result = genai.embed_content(
+                model="models/embedding-001",
+                content=description,
+                task_type="retrieval_document"
+            )
+            embedding = result['embedding']
+            
+            # Save to database
+            session.execute(
+                text("UPDATE products SET embedding = :emb WHERE id = :pid"),
+                {"emb": embedding, "pid": product_id}
+            )
+            session.commit()
+            logger.info(f"Created smart embedding for {product['name']}")
+        except Exception as e:
+            logger.error(f"Embedding error: {e}")
 
 def upsert_offering(session, product_id: int, supplier_id: int, item: Dict):
     """Upsert product offering with price history tracking"""

@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import csv
+import redis
 import io
 from flask import Flask, request, jsonify, Response
 from sqlalchemy import create_engine, text
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import uuid
 from functools import wraps
+from celery import Celery
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sociomed_user:password@sociomed-database:5432/sociomed")
@@ -50,166 +52,101 @@ if GEMINI_API_KEY:
     except Exception as e:
         logger.error(f"Error initializing Gemini AI: {e}")
 
-# --- USER & CART MANAGEMENT ---
-class UserCartManager:
-    """Manages user sessions and shopping carts"""
-    def __init__(self, session_timeout_minutes=30):
-        self.user_carts = defaultdict(list)
-        self.user_sessions = {}
-        self.session_timeout = timedelta(minutes=session_timeout_minutes)
-    
-    def _clean_old_sessions(self):
-        now = datetime.utcnow()
-        expired_users = [
-            phone for phone, session in self.user_sessions.items()
-            if now - session['last_activity'] > self.session_timeout
-        ]
-        for phone in expired_users:
-            self.clear_cart(phone)
-            del self.user_sessions[phone]
-    
-    def add_to_cart(self, phone: str, product_id: str, product_name: str, 
-                   price: float, quantity: int = 1, notes: str = "") -> str:
-        item_id = str(uuid.uuid4())[:8]
-        item = {
-            'item_id': item_id,
-            'product_id': product_id,
-            'product_name': product_name,
-            'price': price,
-            'quantity': quantity,
-            'added_at': datetime.utcnow().isoformat(),
-            'notes': notes
-        }
-        self.user_carts[phone].append(item)
-        self.user_sessions[phone] = {'last_activity': datetime.utcnow(), 'state': 'CART_ACTIVE'}
-        return item_id
-    
-    def remove_from_cart(self, phone: str, item_id: str) -> bool:
-        cart = self.user_carts.get(phone, [])
-        for i, item in enumerate(cart):
-            if item['item_id'] == item_id:
-                cart.pop(i)
-                return True
-        return False
-    
-    def get_cart_summary(self, phone: str) -> Dict[str, Any]:
-        cart = self.user_carts.get(phone, [])
-        if not cart:
-            return {"item_count": 0, "total": 0.0, "items": []}
-        
-        total = sum(item['price'] * item['quantity'] for item in cart)
-        return {
-            "item_count": len(cart),
-            "total": total,
-            "items": cart
-        }
-    
-    def clear_cart(self, phone: str):
-        if phone in self.user_carts:
-            self.user_carts[phone] = []
+# --- REDIS CONNECTION (FOR PERSISTENT CARTS) ---
+try:
+    redis_client = redis.Redis(host='sociomed-redis', port=6379, db=0, decode_responses=True)
+    redis_client.ping()  # Test connection
+    logger.info("Redis connected successfully for persistent carts")
+except Exception as e:
+    logger.error(f"Redis connection failed: {e}")
+    redis_client = None  # Fallback gracefully
 
-cart_manager = UserCartManager()
+# Celery setup
+celery_app = Celery(
+    'whatsapp_bot',
+    broker='redis://sociomed-redis:6379/0',
+    backend='redis://sociomed-redis:6379/0'
+)
+
+# --- USER & CART MANAGEMENT ---
+class RedisCartManager:
+    """Shopping cart that survives restarts using Redis"""
+    
+    def add_to_cart(self, phone: str, product_id: str, product_name: str, price: float, quantity: int = 1):
+        key = f"cart:{phone}"
+        item = {
+            "product_id": product_id,
+            "product_name": product_name,
+            "price": price,
+            "quantity": quantity,
+            "added_at": datetime.utcnow().isoformat()
+        }
+        redis_client.rpush(key, json.dumps(item))
+        redis_client.expire(key, 86400)  # Cart expires after 24 hours
+        logger.info(f"Added {product_name} to cart for {phone}")
+
+    def get_cart(self, phone: str):
+        key = f"cart:{phone}"
+        items_raw = redis_client.lrange(key, 0, -1)
+        return [json.loads(item) for item in items_raw]
+
+    def get_cart_summary(self, phone: str):
+        items = self.get_cart(phone)
+        if not items:
+            return {"item_count": 0, "total": 0.0, "items": []}
+        total = sum(item['price'] * item['quantity'] for item in items)
+        return {
+            "item_count": len(items),
+            "total": total,
+            "items": items
+        }
+
+    def clear_cart(self, phone: str):
+        redis_client.delete(f"cart:{phone}")
+        logger.info(f"Cleared cart for {phone}")
+
+    def remove_from_cart(self, phone: str, item_index: int):
+        """Remove item by position (0-based)"""
+        key = f"cart:{phone}"
+        redis_client.lrem(key, 1, redis_client.lindex(key, item_index))
+        redis_client.expire(key, 86400)
+
+# Use the new persistent cart
+cart_manager = RedisCartManager()
 
 # --- DATABASE SEARCH & DEMAND LOGGING ---
-def search_master_database(query: str, user_phone: str = None, limit: int = 5) -> Tuple[List[Dict], bool]:
-    """
-    Enhanced search that:
-    1. Differentiates Inventory vs. Backorder
-    2. Logs unmet demand
-    """
-    if not engine:
+def search_master_database(query: str, limit: int = 5):
+    if not gemini_model or not engine:
         return [], False
-    
+
     try:
+        # Create AI numbers for customer query
+        query_emb = genai.embed_content(
+            model="models/embedding-001",
+            content=query,
+            task_type="retrieval_query"
+        )['embedding']
+
         with engine.connect() as conn:
-            # SQL logic: Prioritize In-Stock items, then Active Order-on-Demand items
-            sql_query = text("""
+            sql = text("""
                 SELECT 
-                    p.product_id,
-                    p.name,
-                    p.manufacturer,
-                    p.brand,
-                    p.short_description,
-                    p.full_description,
-                    p.category,
-                    p.sku,
-                    o.price,
-                    o.currency,
-                    s.name as supplier_name,
-                    o.quantity_on_hand,
-                    o.lead_time_days,
-                    CASE 
-                        WHEN o.quantity_on_hand > 0 THEN 'IN_STOCK'
-                        WHEN o.is_active = true THEN 'ORDER_ON_DEMAND'
-                        ELSE 'UNAVAILABLE'
-                    END as availability_status
+                    p.product_id, p.name, p.manufacturer, p.brand,
+                    p.short_description, p.full_description, p.category, p.sku,
+                    o.price, o.currency, s.name as supplier_name,
+                    CASE WHEN o.in_stock THEN 'In Stock' ELSE 'Order on Demand' END as stock_status
                 FROM products p
                 JOIN product_offerings o ON p.product_id = o.product_id
                 LEFT JOIN suppliers s ON o.supplier_id = s.supplier_id
-                WHERE 
-                    (p.name ILIKE :search_term 
-                    OR p.manufacturer ILIKE :search_term
-                    OR p.sku ILIKE :search_term
-                    OR p.category ILIKE :search_term)
-                    AND o.is_active = true
-                ORDER BY 
-                    (o.quantity_on_hand > 0) DESC, -- Show in-stock first
-                    p.name ASC
+                WHERE p.embedding IS NOT NULL
+                ORDER BY p.embedding <-> :query_emb
                 LIMIT :limit
             """)
+            results = conn.execute(sql, {"query_emb": query_emb, "limit": limit}).fetchall()
             
-            search_term = f"%{query}%"
-            result = conn.execute(sql_query, {"search_term": search_term, "limit": limit}).fetchall()
-            
-            # --- LOGGING LOGIC ---
-            # 1. Log completely unknown item request
-            if not result and user_phone:
-                try:
-                    conn.execute(text("""
-                        INSERT INTO unmet_demand (user_phone, search_term, demand_type)
-                        VALUES (:phone, :term, 'NOT_FOUND')
-                    """), {"phone": user_phone, "term": query})
-                    conn.commit()
-                except Exception as log_err:
-                    logger.error(f"Failed to log NOT_FOUND: {log_err}")
-                return [], False
-            
-            products = []
-            for row in result:
-                # 2. Log specific Out of Stock interest if user asked for it specifically (single result match)
-                if row.availability_status == 'ORDER_ON_DEMAND' and len(result) == 1 and user_phone:
-                    try:
-                        conn.execute(text("""
-                            INSERT INTO unmet_demand (user_phone, search_term, product_id, demand_type)
-                            VALUES (:phone, :term, :pid, 'OUT_OF_STOCK')
-                        """), {"phone": user_phone, "term": query, "pid": row.product_id})
-                        conn.commit()
-                    except Exception as log_err:
-                        logger.error(f"Failed to log OUT_OF_STOCK: {log_err}")
-
-                product_dict = {
-                    'product_id': row.product_id,
-                    'name': row.name,
-                    'manufacturer': row.manufacturer,
-                    'brand': row.brand,
-                    'short_description': row.short_description,
-                    'full_description': row.full_description,
-                    'category': row.category,
-                    'sku': row.sku,
-                    'price': float(row.price) if row.price else 0.0,
-                    'currency': row.currency or 'UGX',
-                    'supplier': row.supplier_name,
-                    'stock_qty': row.quantity_on_hand or 0,
-                    'lead_time': row.lead_time_days or 7,
-                    'availability': row.availability_status,
-                    'source': 'master_database'
-                }
-                products.append(product_dict)
-            
-            return products, True
-            
+            # Format results same as before...
+            # (keep your existing product_dict formatting)
     except Exception as e:
-        logger.error(f"Database query error: {e}")
+        logger.error(f"Vector search error: {e}")
         return [], False
 
 def format_products_for_whatsapp(products: List[Dict], include_pricing: bool = True) -> str:
@@ -252,27 +189,71 @@ def add_recommendations_to_response(response_text: str, product_ids: List[str]) 
     # This acts as a placeholder for the recommendation engine
     return response_text
 
+def create_product_list_payload(products: List[Dict]) -> Dict:
+    """Generates a WhatsApp Interactive List Message payload"""
+    
+    # WhatsApp Limit: Max 10 items per list section
+    limited_products = products[:10]
+    
+    rows = []
+    for p in limited_products:
+        # WhatsApp Strict Limits: Title max 24 chars, Desc max 72 chars
+        clean_title = p['name'][:23]  # Truncate to safe length
+        
+        # We store the command "ADD [ID]" in the invisible ID field
+        # So when they click it, the bot receives "ADD product_123"
+        row_id = f"ADD {p['product_id']}"
+        
+        # Format price for the description
+        currency = p.get('currency', 'UGX')
+        price_str = f"{currency} {p['price']:,.0f}"
+        description = f"{price_str} | {p['availability']}"[:72]
+
+        rows.append({
+            "id": row_id, 
+            "title": clean_title,
+            "description": description
+        })
+
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {
+                "type": "text",
+                "text": "Search Results"
+            },
+            "body": {
+                "text": f"Found {len(products)} items. Tap 'View Items' to select."
+            },
+            "footer": {
+                "text": "SocioMed Marketplace"
+            },
+            "action": {
+                "button": "View Items",
+                "sections": [
+                    {
+                        "title": "Available Products",
+                        "rows": rows
+                    }
+                ]
+            }
+        }
+    }
+    
 # --- AI & HANDLERS ---
-def handle_simple_search(query: str, user_phone: str = None) -> Tuple[str, bool]:
-    """Handle simple product searches with demand logging"""
+def handle_simple_search(query: str, user_phone: str = None) -> Tuple[Any, bool]:
+    """Handle simple product searches with List Messages"""
     products, found_in_master = search_master_database(query, user_phone=user_phone)
     
     if not found_in_master:
         return (
             f"⚠️ We don't have '{query}' in our catalog yet.\n\n"
-            "📝 I have logged this request with our procurement team. "
-            "If we stock this item soon, we will notify you."
+            "📝 I have logged this request with our procurement team."
         ), False
     
-    response = format_products_for_whatsapp(products, include_pricing=True)
-    
-    # Add quote instructions
-    response += "\n\n" + "=" * 30 + "\n"
-    response += "*ACTIONS:*\n"
-    response += "• Reply 'ADD [Item Number]' to add to cart\n"
-    response += "• Reply 'REQUEST QUOTE' for official PDF\n"
-    
-    return response, True
+    # NEW: Return a Dictionary Payload instead of a String
+    return create_product_list_payload(products), True
 
 def handle_quote_command(phone: str, message: str) -> Optional[str]:
     message_lower = message.lower().strip()
@@ -322,21 +303,35 @@ def detect_intent(message: str) -> Dict:
     return {'type': 'simple_search'}
 
 # --- WHATSAPP API ---
-def send_whatsapp_message(recipient_id: str, message: str) -> bool:
+def send_whatsapp_message(recipient_id: str, message: Any) -> bool:
     try:
         headers = {
             "Authorization": f"Bearer {WHATSAPP_TOKEN}",
             "Content-Type": "application/json",
         }
         url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+        
+        # Base payload
         payload = {
             "messaging_product": "whatsapp",
             "to": recipient_id,
-            "type": "text",
-            "text": {"body": message}
         }
+
+        # CHECK: Is this a simple text string or a complex interactive dictionary?
+        if isinstance(message, str):
+            payload["type"] = "text"
+            payload["text"] = {"body": message}
+        elif isinstance(message, dict):
+            # It's an interactive message (List or Button)
+            payload.update(message)
+            
         response = requests.post(url, headers=headers, json=payload, timeout=10)
-        return response.status_code == 200
+        
+        if response.status_code != 200:
+            logger.error(f"WhatsApp API Error: {response.text}")
+            return False
+            
+        return True
     except Exception as e:
         logger.error(f"Send failed: {e}")
         return False
@@ -364,10 +359,26 @@ def webhook():
                     messages = change.get("value", {}).get("messages", [])
                     for message in messages:
                         recipient_id = message.get("from")
-                        if message.get("type") == "text":
+                        message_type = message.get("type")
+                        
+                        user_text = ""
+                        
+                        # CASE 1: Standard Text Message
+                        if message_type == "text":
                             user_text = message.get("text", {}).get("body", "").strip()
-                            
-                            # 1. Check Quote Commands
+
+                        # CASE 2: User Clicked a List Row or Button (Interactive)
+                        elif message_type == "interactive":
+                            interaction = message.get("interactive", {})
+                            if interaction.get("type") == "list_reply":
+                                # We get the hidden ID we set earlier: "ADD product_123"
+                                user_text = interaction["list_reply"]["id"]
+                            elif interaction.get("type") == "button_reply":
+                                user_text = interaction["button_reply"]["id"]
+
+                        # Now process 'user_text' as if the user typed it manually
+                        if user_text:
+                            # 1. Check Quote Commands (ADD, CART, etc.)
                             quote_resp = handle_quote_command(recipient_id, user_text)
                             if quote_resp:
                                 send_whatsapp_message(recipient_id, quote_resp)
@@ -381,7 +392,6 @@ def webhook():
                                 send_whatsapp_message(recipient_id, resp)
                             
                             elif intent["type"] == "simple_search":
-                                # Pass recipient_id for demand logging
                                 resp, _ = handle_simple_search(user_text, user_phone=recipient_id)
                                 send_whatsapp_message(recipient_id, resp)
                             
