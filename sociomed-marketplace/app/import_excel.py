@@ -44,7 +44,9 @@ class Config:
             "Manufacturer": "manufacturer",
             "Distributor": "distributor_name", # Note: Schema might need update to handle distributor if not present
             "Code_Straight": "code_straight",
-            "Code_Curve": "code_curve"
+            "Code_Curve": "code_curve",
+            "Compatible With": "upsell_hints",  # <--- NEW: Maps Excel column "Compatible With"
+            "Substitute Item": "substitute_hints"
         },
 
         # 2. Bundles & Kits (Source: sociomed_db - bund_kits.csv)
@@ -242,6 +244,31 @@ class SocioMedETL:
     def transform_to_schema(self):
         logger.info("⚙️  Running Transformations (Staging -> Production)...")
         with self.engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO products (
+                    sku, name, category, description, brand, manufacturer, 
+                    upsell_hints, data_source, trust_score
+                )
+                SELECT DISTINCT 
+                    sku, 
+                    name, 
+                    LOWER(category), -- Normalize to match CHECK constraint
+                    description,
+                    brand,
+                    manufacturer,
+                    upsell_hints,
+                    'INVENTORY_EXCEL',
+                    100 -- <--- HIGH SCORE: This is the Master Data
+                FROM stg_db_4_g
+                WHERE sku IS NOT NULL
+                ON CONFLICT (sku) DO UPDATE SET 
+                    -- ALWAYS OVERWRITE if new score >= old score
+                    name = EXCLUDED.name,
+                    category = EXCLUDED.category,
+                    trust_score = EXCLUDED.trust_score,
+                    upsell_hints = EXCLUDED.upsell_hints
+                WHERE products.trust_score <= EXCLUDED.trust_score; 
+            """))
             
             # 1. SUPPLIERS (from stg_man_and_dis)
             if self._table_exists(conn, 'stg_man_and_dis'):
