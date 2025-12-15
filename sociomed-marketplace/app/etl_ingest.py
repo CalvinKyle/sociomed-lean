@@ -430,28 +430,34 @@ def extract_with_gemini_chunked(text: str, filename: str, retry_count: int = API
 # -------------------------- DATABASE FUNCTIONS --------------------------
 def upsert_supplier(session, supplier_data: Dict) -> int:
     """Upsert supplier with enhanced details"""
+    source_id_result = session.execute(
+        text("SELECT source_id FROM config.data_sources WHERE source_name = 'pdf_etl'")
+    ).scalar()
+    source_id = source_id_result if source_id_result else 1
+    
     result = session.execute(
         text("""
-            INSERT INTO suppliers (name, code, country, contact_email, data_source, metadata)
-            VALUES (:name, :code, :country, :email, :source, :metadata::jsonb)
+            INSERT INTO inventory.suppliers (name, code, country, contact_email, data_source_id, metadata)
+            VALUES (:name, :code, :country, :email, :source_id, :metadata::jsonb)
             ON CONFLICT (name) DO UPDATE SET
-                code = COALESCE(EXCLUDED.code, suppliers.code),
-                country = COALESCE(EXCLUDED.country, suppliers.country),
-                contact_email = COALESCE(EXCLUDED.contact_email, suppliers.contact_email),
-                data_source = EXCLUDED.data_source,
-                metadata = COALESCE(suppliers.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+                code = COALESCE(EXCLUDED.code, inventory.suppliers.code),
+                country = COALESCE(EXCLUDED.country, inventory.suppliers.country),
+                contact_email = COALESCE(EXCLUDED.contact_email, inventory.suppliers.contact_email),
+                data_source_id = EXCLUDED.data_source_id,
+                metadata = COALESCE(inventory.suppliers.metadata, '{}'::jsonb) || EXCLUDED.metadata,
                 updated_at = CURRENT_TIMESTAMP
-            RETURNING id
+            RETURNING supplier_id
         """),
         {
             "name": supplier_data.get("supplier_name", "Unknown Supplier"),
             "code": supplier_data.get("supplier_code"),
             "country": supplier_data.get("country", ""),
             "email": supplier_data.get("contact_email", ""),
-            "source": supplier_data.get("filename", "manual"),
+            "source_id": source_id,
             "metadata": json.dumps({
                 "extraction_method": supplier_data.get("extraction_method", "unknown"),
                 "processed_at": datetime.now().isoformat()
+                "original_filename": supplier_data.get("filename")
             })
         }
     )
@@ -461,7 +467,7 @@ def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
     # 1. Get Source ID for PDF
     source_id = get_source_id(session, "pdf_etl")
     
-    # 2. Check for existing product (Using inventory schema)
+    # FIX 4: Added 'inventory.' schema prefix
     existing = session.execute(
         text("""
             SELECT product_id, primary_source_id FROM inventory.products 
@@ -472,22 +478,14 @@ def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
 
     if existing:
         product_id, current_source_id = existing
-        # LOGIC: Only update if current source is NOT 'excel_import' (ID 10 vs 50)
-        # We assume lower priority ID = High Authority (e.g. Excel=10, PDF=50)
-        # We check the priority of the current source vs incoming
-        current_priority = session.execute(text("SELECT priority FROM config.data_sources WHERE source_id=:sid"), {"sid": current_source_id}).scalar()
-        incoming_priority = 50 # PDF priority
-        
-        if incoming_priority < current_priority:
-             # Perform Update
-             pass 
+        # Logic to check priority would go here
         return product_id, False
     else:
-        # 3. Insert New (Using inventory schema)
+        # FIX 5: Mapped 'description' to 'full_description' (Schema has short/full, not generic description)
         result = session.execute(
             text("""
                 INSERT INTO inventory.products (
-                    sku, name, description, brand, category, 
+                    sku, name, full_description, brand, category, 
                     unit_of_measure, specifications, primary_source_id, embedding
                 )
                 VALUES (
@@ -499,69 +497,46 @@ def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
             {
                 "sku": item.get("sku"),
                 "name": item.get("name"),
-                "desc": item.get("description", ""),
+                "desc": item.get("description", ""), # Maps to full_description
                 "brand": item.get("brand"),
-                "category": item.get("category", "GENERAL"),
+                "category": item.get("category", "GENERAL_MEDICAL"), # Valid schema enum
                 "unit": item.get("unit", "UNIT"),
                 "specs": json.dumps(item),
                 "src_id": source_id,
-                "emb": None # Embedding is generated later or passed here if calculated
+                "emb": None 
             }
         )
         return result.scalar_one(), True
 
-    # Generate embedding from description
-    description = product.get('full_description') or product.get('short_description') or product['name']
-    if description and gemini_model:
-        try:
-            result = genai.embed_content(
-                model="models/embedding-001",
-                content=description,
-                task_type="retrieval_document"
-            )
-            embedding = result['embedding']
-            
-            # Save to database
-            session.execute(
-                text("UPDATE products SET embedding = :emb WHERE id = :pid"),
-                {"emb": embedding, "pid": product_id}
-            )
-            session.commit()
-            logger.info(f"Created smart embedding for {product['name']}")
-        except Exception as e:
-            logger.error(f"Embedding error: {e}")
-
 def upsert_offering(session, product_id: int, supplier_id: int, item: Dict):
     """Upsert product offering with price history tracking"""
+    
+    # FIX 6: Get source ID (Required by schema NOT NULL constraint)
+    source_id = get_source_id(session, "pdf_etl")
+
+    # FIX 7: Added 'inventory.' schema prefix
+    # FIX 8: Removed 'metadata' column (Schema inventory.product_offerings does not have it)
+    # FIX 9: Added 'source_id' to INSERT
     session.execute(
         text("""
-            INSERT INTO product_offerings (product_id, supplier_id, price, currency, moq, is_active, metadata)
-            VALUES (:pid, :sid, :price, :curr, :moq, true, :metadata::jsonb)
-            ON CONFLICT (product_id, supplier_id) DO UPDATE SET
+            INSERT INTO inventory.product_offerings (
+                product_id, supplier_id, price, currency, moq, is_active, source_id, last_updated
+            )
+            VALUES (:pid, :sid, :price, :curr, :moq, true, :src_id, CURRENT_TIMESTAMP)
+            ON CONFLICT (product_id, supplier_id, supplier_sku) DO UPDATE SET
                 price = EXCLUDED.price,
                 currency = EXCLUDED.currency,
                 moq = EXCLUDED.moq,
                 is_active = true,
-                last_updated = CURRENT_TIMESTAMP,
-                metadata = COALESCE(product_offerings.metadata, '{}'::jsonb) || jsonb_build_object(
-                    'previous_price', product_offerings.price,
-                    'previous_currency', product_offerings.currency,
-                    'price_changed_at', CURRENT_TIMESTAMP
-                )
+                last_updated = CURRENT_TIMESTAMP
         """),
         {
             "pid": product_id,
             "sid": supplier_id,
             "price": item.get("price", 0),
-            "curr": item.get("currency", "USD"),
+            "curr": item.get("currency", "UGX"),
             "moq": item.get("moq", 1),
-            "metadata": json.dumps({
-                "original_price": item.get("original_price"),
-                "original_currency": item.get("original_currency"),
-                "converted_to_usd": 'price_usd' in item,
-                "extraction_source": item.get("chunk_source", "direct"),
-                "processed_at": datetime.now().isoformat()
-            })
+            "src_id": source_id
         }
     )
 
