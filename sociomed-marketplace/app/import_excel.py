@@ -244,127 +244,53 @@ class SocioMedETL:
     def transform_to_schema(self):
         logger.info("⚙️  Running Transformations (Staging -> Production)...")
         with self.engine.begin() as conn:
+            # 1. Get Excel Source ID (High Priority)
+            excel_source_id = conn.execute(text("SELECT source_id FROM config.data_sources WHERE source_name = 'excel_import'")).scalar() or 1
+
+            # 2. PRODUCTS (Main DB) -> inventory.products
+            logger.info("   -> Transforming Products...")
             conn.execute(text("""
-                INSERT INTO products (
+                INSERT INTO inventory.products (
                     sku, name, category, description, brand, manufacturer, 
-                    upsell_hints, data_source, trust_score
+                    regulatory_status, upsell_hints, primary_source_id
                 )
                 SELECT DISTINCT 
-                    sku, 
-                    name, 
-                    LOWER(category), -- Normalize to match CHECK constraint
-                    description,
-                    brand,
-                    manufacturer,
-                    upsell_hints,
-                    'INVENTORY_EXCEL',
-                    100 -- <--- HIGH SCORE: This is the Master Data
+                    sku, name, 
+                    COALESCE(category, 'GENERAL'), 
+                    description, brand, manufacturer,
+                    regulatory_status, upsell_hints,
+                    :source_id
                 FROM stg_db_4_g
                 WHERE sku IS NOT NULL
                 ON CONFLICT (sku) DO UPDATE SET 
-                    -- ALWAYS OVERWRITE if new score >= old score
+                    -- Excel is High Priority (10), so we force update over PDF (50)
                     name = EXCLUDED.name,
-                    category = EXCLUDED.category,
-                    trust_score = EXCLUDED.trust_score,
-                    upsell_hints = EXCLUDED.upsell_hints
-                WHERE products.trust_score <= EXCLUDED.trust_score; 
+                    description = EXCLUDED.description,
+                    primary_source_id = EXCLUDED.primary_source_id;
+            """), {"source_id": excel_source_id})
+
+            # 3. OFFERINGS (Price/Stock) -> inventory.product_offerings
+            logger.info("   -> Transforming Offerings...")
+            conn.execute(text("""
+                INSERT INTO inventory.product_offerings (
+                    product_id, supplier_id, price, stock_status, 
+                    min_order_quantity, lead_time_days
+                )
+                SELECT 
+                    p.product_id,
+                    1, -- Default Supplier (SocioMed)
+                    CAST(REGEXP_REPLACE(stg.price::text, '[^0-9.]', '', 'g') AS DECIMAL),
+                    stg.stock_status,
+                    CAST(NULLIF(stg.min_order_quantity, '') AS INTEGER),
+                    CAST(NULLIF(stg.lead_time_days, '') AS INTEGER)
+                FROM stg_db_4_g stg
+                JOIN inventory.products p ON stg.sku = p.sku
+                WHERE stg.price IS NOT NULL
+                ON CONFLICT (product_id, supplier_id) DO UPDATE SET
+                    price = EXCLUDED.price,
+                    stock_status = EXCLUDED.stock_status,
+                    quantity_on_hand = CASE WHEN EXCLUDED.stock_status = 'In Stock' THEN 100 ELSE 0 END; 
             """))
-            
-            # 1. SUPPLIERS (from stg_man_and_dis)
-            if self._table_exists(conn, 'stg_man_and_dis'):
-                logger.info("   -> Transforming Suppliers...")
-                conn.execute(text("""
-                    INSERT INTO suppliers (name, type, contact_phone)
-                    SELECT DISTINCT name, 'PARTNER', contact_phone
-                    FROM stg_man_and_dis
-                    ON CONFLICT (supplier_id) DO NOTHING;
-                """))
-
-            # 2. PRODUCTS (from stg_db_4_g) -> This is the REAL catalog
-            if self._table_exists(conn, 'stg_db_4_g'):
-                logger.info("   -> Transforming Products (Main DB)...")
-                conn.execute(text("""
-                    INSERT INTO products (sku, name, category, description, brand, manufacturer, regulatory_status)
-                    SELECT DISTINCT 
-                        sku, 
-                        name, 
-                        category, 
-                        description,
-                        brand,
-                        manufacturer,
-                        regulatory_status
-                    FROM stg_db_4_g
-                    WHERE sku IS NOT NULL
-                    ON CONFLICT (sku) DO UPDATE SET 
-                        category = EXCLUDED.category,
-                        name = EXCLUDED.name,
-                        description = EXCLUDED.description;
-                """))
-                
-                # 2b. OFFERINGS (from stg_db_4_g) -> Populate Prices/Inventory
-                # We link these to SocioMed (Supplier ID 1) as default
-                logger.info("   -> Transforming Product Offerings...")
-                conn.execute(text("""
-                    INSERT INTO product_offerings (product_id, supplier_id, price, stock_status, min_order_quantity, lead_time_days)
-                    SELECT 
-                        p.product_id,
-                        1, -- Defaulting to Supplier 1 (SocioMed)
-                        CAST(REGEXP_REPLACE(stg.price::text, '[^0-9.]', '', 'g') AS DECIMAL),
-                        stg.stock_status,
-                        CAST(NULLIF(stg.min_order_quantity, '') AS INTEGER),
-                        CAST(NULLIF(stg.lead_time_days, '') AS INTEGER)
-                    FROM stg_db_4_g stg
-                    JOIN products p ON stg.sku = p.sku
-                    WHERE stg.price IS NOT NULL
-                    ON CONFLICT (product_id, supplier_id) DO UPDATE SET
-                        price = EXCLUDED.price,
-                        stock_status = EXCLUDED.stock_status;
-                """))
-
-            # 3. KATSAN PRODUCTS (Enriching Catalog)
-            if self._table_exists(conn, 'stg_katsan_pdts'):
-                logger.info("   -> Transforming Katsan Products...")
-                conn.execute(text("""
-                    INSERT INTO products (sku, name, category, description, brand)
-                    SELECT DISTINCT 
-                        sku, name, category, description, brand
-                    FROM stg_katsan_pdts
-                    WHERE sku IS NOT NULL
-                    ON CONFLICT (sku) DO NOTHING;
-                """))
-
-            # 4. BUNDLES (from stg_bund_kits)
-            if self._table_exists(conn, 'stg_bund_kits'):
-                logger.info("   -> Transforming Bundles...")
-                conn.execute(text("""
-                    INSERT INTO bundles (name, description, total_price, currency)
-                    SELECT DISTINCT 
-                        name, description, 
-                        CAST(REGEXP_REPLACE(total_price::text, '[^0-9.]', '', 'g') AS DECIMAL),
-                        'UGX'
-                    FROM stg_bund_kits
-                    WHERE name IS NOT NULL
-                    ON CONFLICT (bundle_id) DO NOTHING;
-                """))
-
-            # 5. CLIENTS/PREMISES
-            if self._table_exists(conn, 'stg_premises'):
-                logger.info("   -> Transforming Clients (Premises)...")
-                conn.execute(text("""
-                    INSERT INTO users (phone_number, clinic_name, contact_person, email, tax_id, address)
-                    SELECT DISTINCT 
-                        COALESCE(phone_number, 'UNK-' || MD5(clinic_name)), 
-                        clinic_name, 
-                        contact_person, 
-                        email, 
-                        tax_id, 
-                        address
-                    FROM stg_premises
-                    WHERE clinic_name IS NOT NULL
-                    ON CONFLICT (phone_number) DO NOTHING;
-                """))
-
-        logger.info("✅ Transformations Complete.")
 
     def _table_exists(self, conn, table_name):
         return conn.execute(text(f"SELECT to_regclass('{table_name}')")).scalar() is not None
