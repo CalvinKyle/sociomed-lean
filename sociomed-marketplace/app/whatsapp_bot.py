@@ -189,27 +189,71 @@ def add_recommendations_to_response(response_text: str, product_ids: List[str]) 
     # This acts as a placeholder for the recommendation engine
     return response_text
 
+def create_product_list_payload(products: List[Dict]) -> Dict:
+    """Generates a WhatsApp Interactive List Message payload"""
+    
+    # WhatsApp Limit: Max 10 items per list section
+    limited_products = products[:10]
+    
+    rows = []
+    for p in limited_products:
+        # WhatsApp Strict Limits: Title max 24 chars, Desc max 72 chars
+        clean_title = p['name'][:23]  # Truncate to safe length
+        
+        # We store the command "ADD [ID]" in the invisible ID field
+        # So when they click it, the bot receives "ADD product_123"
+        row_id = f"ADD {p['product_id']}"
+        
+        # Format price for the description
+        currency = p.get('currency', 'UGX')
+        price_str = f"{currency} {p['price']:,.0f}"
+        description = f"{price_str} | {p['availability']}"[:72]
+
+        rows.append({
+            "id": row_id, 
+            "title": clean_title,
+            "description": description
+        })
+
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {
+                "type": "text",
+                "text": "Search Results"
+            },
+            "body": {
+                "text": f"Found {len(products)} items. Tap 'View Items' to select."
+            },
+            "footer": {
+                "text": "SocioMed Marketplace"
+            },
+            "action": {
+                "button": "View Items",
+                "sections": [
+                    {
+                        "title": "Available Products",
+                        "rows": rows
+                    }
+                ]
+            }
+        }
+    }
+    
 # --- AI & HANDLERS ---
-def handle_simple_search(query: str, user_phone: str = None) -> Tuple[str, bool]:
-    """Handle simple product searches with demand logging"""
+def handle_simple_search(query: str, user_phone: str = None) -> Tuple[Any, bool]:
+    """Handle simple product searches with List Messages"""
     products, found_in_master = search_master_database(query, user_phone=user_phone)
     
     if not found_in_master:
         return (
             f"⚠️ We don't have '{query}' in our catalog yet.\n\n"
-            "📝 I have logged this request with our procurement team. "
-            "If we stock this item soon, we will notify you."
+            "📝 I have logged this request with our procurement team."
         ), False
     
-    response = format_products_for_whatsapp(products, include_pricing=True)
-    
-    # Add quote instructions
-    response += "\n\n" + "=" * 30 + "\n"
-    response += "*ACTIONS:*\n"
-    response += "• Reply 'ADD [Item Number]' to add to cart\n"
-    response += "• Reply 'REQUEST QUOTE' for official PDF\n"
-    
-    return response, True
+    # NEW: Return a Dictionary Payload instead of a String
+    return create_product_list_payload(products), True
 
 def handle_quote_command(phone: str, message: str) -> Optional[str]:
     message_lower = message.lower().strip()
@@ -259,21 +303,35 @@ def detect_intent(message: str) -> Dict:
     return {'type': 'simple_search'}
 
 # --- WHATSAPP API ---
-def send_whatsapp_message(recipient_id: str, message: str) -> bool:
+def send_whatsapp_message(recipient_id: str, message: Any) -> bool:
     try:
         headers = {
             "Authorization": f"Bearer {WHATSAPP_TOKEN}",
             "Content-Type": "application/json",
         }
         url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+        
+        # Base payload
         payload = {
             "messaging_product": "whatsapp",
             "to": recipient_id,
-            "type": "text",
-            "text": {"body": message}
         }
+
+        # CHECK: Is this a simple text string or a complex interactive dictionary?
+        if isinstance(message, str):
+            payload["type"] = "text"
+            payload["text"] = {"body": message}
+        elif isinstance(message, dict):
+            # It's an interactive message (List or Button)
+            payload.update(message)
+            
         response = requests.post(url, headers=headers, json=payload, timeout=10)
-        return response.status_code == 200
+        
+        if response.status_code != 200:
+            logger.error(f"WhatsApp API Error: {response.text}")
+            return False
+            
+        return True
     except Exception as e:
         logger.error(f"Send failed: {e}")
         return False
@@ -301,10 +359,26 @@ def webhook():
                     messages = change.get("value", {}).get("messages", [])
                     for message in messages:
                         recipient_id = message.get("from")
-                        if message.get("type") == "text":
+                        message_type = message.get("type")
+                        
+                        user_text = ""
+                        
+                        # CASE 1: Standard Text Message
+                        if message_type == "text":
                             user_text = message.get("text", {}).get("body", "").strip()
-                            
-                            # 1. Check Quote Commands
+
+                        # CASE 2: User Clicked a List Row or Button (Interactive)
+                        elif message_type == "interactive":
+                            interaction = message.get("interactive", {})
+                            if interaction.get("type") == "list_reply":
+                                # We get the hidden ID we set earlier: "ADD product_123"
+                                user_text = interaction["list_reply"]["id"]
+                            elif interaction.get("type") == "button_reply":
+                                user_text = interaction["button_reply"]["id"]
+
+                        # Now process 'user_text' as if the user typed it manually
+                        if user_text:
+                            # 1. Check Quote Commands (ADD, CART, etc.)
                             quote_resp = handle_quote_command(recipient_id, user_text)
                             if quote_resp:
                                 send_whatsapp_message(recipient_id, quote_resp)
@@ -318,7 +392,6 @@ def webhook():
                                 send_whatsapp_message(recipient_id, resp)
                             
                             elif intent["type"] == "simple_search":
-                                # Pass recipient_id for demand logging
                                 resp, _ = handle_simple_search(user_text, user_phone=recipient_id)
                                 send_whatsapp_message(recipient_id, resp)
                             
