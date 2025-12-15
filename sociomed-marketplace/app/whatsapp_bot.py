@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import uuid
 from functools import wraps
+from celery import Celery
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sociomed_user:password@sociomed-database:5432/sociomed")
@@ -59,7 +60,14 @@ try:
 except Exception as e:
     logger.error(f"Redis connection failed: {e}")
     redis_client = None  # Fallback gracefully
-    
+
+# Celery setup
+celery_app = Celery(
+    'whatsapp_bot',
+    broker='redis://sociomed-redis:6379/0',
+    backend='redis://sociomed-redis:6379/0'
+)
+
 # --- USER & CART MANAGEMENT ---
 class RedisCartManager:
     """Shopping cart that survives restarts using Redis"""
