@@ -15,6 +15,7 @@ SET client_min_messages = warning;
 -- Enable Required Extensions
 CREATE EXTENSION IF NOT EXISTS pg_trgm;  -- For fuzzy text search (e.g., "cathter" -> "catheter")
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; -- For unique IDs
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Create Organizational Schemas (Namespaces)
 CREATE SCHEMA IF NOT EXISTS config;    -- System settings & ETL sources
@@ -132,6 +133,7 @@ CREATE TABLE inventory.products (
     requires_prescription BOOLEAN DEFAULT FALSE,
     requires_cold_chain BOOLEAN DEFAULT FALSE, -- Critical for Reagents
     regulatory_status VARCHAR(100),
+    embedding vector (768),
     
     -- Source Tracking (For Conflict Resolution)
     primary_source_id INT REFERENCES config.data_sources(source_id),
@@ -183,5 +185,7 @@ CREATE TABLE inventory.product_offerings (
     quantity_available INT GENERATED ALWAYS AS (quantity_on_hand - quantity_reserved) STORED,
     
     stock_status VARCHAR(50) DEFAULT 'IN_STOCK',
+    lead_time_days INT DEFAULT 0,
+    min_order_quantity INT DEFAULT 1,
     
     -- Logistics
