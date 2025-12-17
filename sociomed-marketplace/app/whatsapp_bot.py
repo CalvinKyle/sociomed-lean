@@ -378,7 +378,37 @@ def handle_search(query):
             "action": {"button": "View Items", "sections": sections}
         }
     }
+
+def handle_search(query):
+    # 1. Search Templates
+    results = odoo.search_product_templates(query)
     
+    if not results:
+        return "❌ No items found."
+        
+    sections = []
+    for p in results[:5]:
+        # If product has options (Size, etc.), button triggers configuration
+        if p['attributes']:
+            desc = f"Options: {', '.join(p['attributes'].keys())} | {p['price']:,.0f} UGX"
+            btn_id = f"CONFIG_{p['template_id']}" # Trigger config flow
+        else:
+            desc = f"{p['price']:,.0f} UGX"
+            btn_id = f"ADD_{p['template_id']}" # Direct add
+            
+        sections.append({
+            "title": p['name'][:24], 
+            "description": desc,
+            "id": btn_id
+        })
+        
+    return create_list_message("Found Items", sections)
+
+def handle_config_selection(user_id, template_id, selection_step):
+    # Logic to ask for "Size" then "Lumen" using Interactive Buttons
+    # ...
+    return "Please select Size:" # With buttons [10Fr] [12Fr] 
+
 def handle_add_to_cart_logic(user_id, product_id):
     # 1. Add item to Redis Cart
     cart_manager.add_item(user_id, int(product_id), 1)
