@@ -521,6 +521,8 @@ def webhook():
 
                         # Now process 'user_text' as if the user typed it manually
                         if user_text:
+                                                    if user_text:
+                            # Handle Quick Action Commands first
                             if user_text == "CMD_CART":
                                 user_text = "cart" 
                                 
@@ -530,7 +532,7 @@ def webhook():
                             elif user_text == "CMD_CLEAR":
                                 cart_manager.clear_cart(recipient_id)
                                 send_whatsapp_message(recipient_id, "✅ Cart has been cleared.")
-                                continue # Stop processing
+                                continue
                                 
                             elif user_text == "CMD_SUPPORT":
                                 msg = (
@@ -543,11 +545,9 @@ def webhook():
                                 continue
                                 
                             elif user_text == "CMD_CATALOG":
-                                # Construct a Document Message Payload
                                 doc_payload = {
                                     "type": "document",
                                     "document": {
-                                        # REPLACE with your actual hosted PDF link
                                         "link": "https://www.socio-med.com/files/2026_Catalog.pdf",
                                         "caption": "📚 SocioMed 2026 General Catalog.pdf",
                                         "filename": "SocioMed_Catalog.pdf"
@@ -557,54 +557,27 @@ def webhook():
                                 continue
 
                             elif user_text == "CMD_RECOMMEND":
-                                cart_summ = cart_manager.get_cart_summary(recipient_id)
-                                if cart_summ['item_count'] == 0:
-                                    msg = "💡 *Recommendations*\n\nPlease add items to your cart first! We can then suggest accessories and consumables matching your selection."
-                                    send_whatsapp_message(recipient_id, msg)
+                                # ... keep your existing recommendation logic ...
+
+                            # NEW: Handle "ADD_{product_id}" from interactive list selection
+                            elif user_text.startswith("ADD_"):
+                                product_id = user_text.split("_", 1)[1]
+                                try:
+                                    response = handle_add_to_cart_logic(recipient_id, product_id)
+                                    send_whatsapp_message(recipient_id, response)
+                                    continue
+                                except Exception as e:
+                                    logger.error(f"Add to cart failed: {e}")
+                                    send_whatsapp_message(recipient_id, "⚠️ Could not add item. Please try again.")
                                     continue
 
-                                msg_lines = ["💡 *Recommended based on your Cart:*\n"]
-                                has_recs = False
-
-                                for item in cart_summ['items'][-3:]:
-                                    # Call the separate engine script
-                                    recs = get_recommendations(engine, item['product_id'])
-                                    
-                                    if recs['consumables'] or recs['similar']:
-                                        has_recs = True
-                                        msg_lines.append(f"Because you added *{item['product_name']}*:")
-                                        
-                                        # Show consumables (High priority)
-                                        for cons in recs['consumables']:
-                                            msg_lines.append(f"  • {cons}")
-                                            
-                                        # Show similar (Low priority - only if no consumables)
-                                        if not recs['consumables']:
-                                            for sim in recs['similar']:
-                                                msg_lines.append(f"  • Compare: {sim}")
-                                        
-                                        msg_lines.append("") # Empty line
-
-                                if not has_recs:
-                                    msg = "✅ Excellent choices! We don't have any specific add-ons for these items yet."
-                                else:
-                                    msg = "\n".join(msg_lines)
-                                    # Add a footer tip
-                                    msg += "\nType *'ADD [Item Name]'* to add any of these to your order."
-                                    
-                                send_whatsapp_message(recipient_id, "💡 Based on your search, we recommend checking out: [Gloves], [Syringes].")
-                                continue
-
-                            # -----------------------------------------------------
-                            # 2. STANDARD COMMANDS & SEARCH
-                            # -----------------------------------------------------
-                            # Check Quote Commands (ADD, CART, etc.)
+                            # Existing quote/cart commands
                             quote_resp = handle_quote_command(recipient_id, user_text)
                             if quote_resp:
                                 send_whatsapp_message(recipient_id, quote_resp)
                                 continue
 
-                            # 2. Check Intent
+                            # Detect intent and handle search
                             intent = detect_intent(user_text)
                             
                             if intent["type"] == "greeting":
@@ -612,7 +585,7 @@ def webhook():
                                 send_whatsapp_message(recipient_id, resp)
                             
                             elif intent["type"] == "simple_search":
-                                resp, _ = handle_simple_search(user_text, user_phone=recipient_id)
+                                resp = handle_search(user_text)  # Now using the new unified handler
                                 send_whatsapp_message(recipient_id, resp)
                             
         return jsonify({"status": "processed"}), 200
