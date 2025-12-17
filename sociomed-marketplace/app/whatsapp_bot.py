@@ -5,7 +5,7 @@ import csv
 import redis
 import io
 from flask import Flask, request, jsonify, Response
-from sqlalchemy import create_engine, text
+from app.odoo_connector import OdooConnector
 import time
 import google.generativeai as genai
 from typing import Dict, List, Tuple, Optional, Any
@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- INITIALIZE COMPONENTS ---
+# Initialize Odoo Connection
+try:
+    odoo = OdooConnector()
+except:
+    print("⚠️ Odoo not configured. Bot will fail.") 
+
 # Database
 try:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
@@ -308,30 +314,29 @@ def create_product_list_payload(products: List[Dict]) -> Dict:
     }
     
 # --- AI & HANDLERS ---
-def handle_simple_search(query: str, user_phone: str = None) -> Tuple[Any, bool]:
-    """Handle simple product searches with List Messages"""
-    products, found_in_master = search_master_database(query, user_phone=user_phone)
+def handle_simple_search(user_query, user_phone=None):
+    # 1. Call Odoo instead of SQL
+    products = odoo.search_products(user_query)
     
-    if not found_in_master:
-        return (
-            f"⚠️ We don't have '{query}' in our catalog yet.\n\n"
-            "📝 I have logged this request with our procurement team."
-        ), False
-    
-    # NEW: Return a Dictionary Payload instead of a String
+    if not products:
+        return "❌ We couldn't find any items matching that description.", False
+
+    # 2. Pass results to your existing list formatter
+    # (The list formatter already works with the dict structure we returned above)
     return create_product_list_payload(products), True
 
-def handle_quote_command(phone: str, message: str) -> Optional[str]:
-    message_lower = message.lower().strip()
+def handle_quote_command(recipient_id, text):
+    # ... [Keep your existing cart retrieval logic] ...
+    cart_items = cart_manager.get_cart(recipient_id)
     
-    if message_lower.startswith('add '):
-        # Logic to handle adding by name or ID could go here
-        # For simplicity, we search and add the first result
-        item_name = message[4:].strip()
-        products, found = search_master_database(item_name, user_phone=phone, limit=1)
-        
-        if not found:
-            return f"❌ '{item_name}' not found."
+    # 3. Create Quote in Odoo
+    try:
+        order_ref = odoo.create_quotation(recipient_id, cart_items)
+        return (f"✅ *Quote Generated!* \n"
+                f"Reference: *{order_ref}*\n\n"
+                f"You will receive a PDF invoice shortly via email or you can view it on our website.")
+    except Exception as e:
+        return "⚠️ System Error: Could not generate quote. Please try again."
         
         product = products[0]
         item_id = cart_manager.add_to_cart(phone, product['product_id'], product['name'], product['price'])
