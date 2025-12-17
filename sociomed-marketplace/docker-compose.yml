@@ -1,61 +1,43 @@
+version: '3.5'
+
 services:
-  sociomed-database:
-    image: ankane/pgvector:latest               # Latest stable as of Dec 2025
-    container_name: sociomed-database
-    restart: unless-stopped
+  # 1. THE BRAIN (Odoo ERP)
+  web:
+    image: odoo:16.0
+    depends_on:
+        db:
+    ports:
+        "8069:8069" # This makes Odoo accessible at your-domain.com:8069
     environment:
-      POSTGRES_USER: sociomed_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}     # Loaded from .env
-      POSTGRES_DB: sociomed
+        HOST: db
+        USER: odoo
+        PASSWORD: ${ODOO_PASSWORD}          # Loaded from .env
     volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./db:/docker-entrypoint-initdb.d    # Mount entire db/ folder — all .sql files run automatically
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sociomed_user -d sociomed"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+        odoo-web-data:/var/lib/odoo
+        ./odoo_custom_addons:/mnt/extra-addons   # Loads your custom modules
 
-  sociomed-app:
-    build: .
-    container_name: sociomed-app
-    restart: unless-stopped
-    depends_on:
-      sociomed-database:
-        condition: service_healthy          # Waits for DB to be ready
+  # 2. THE MEMORY (PostgreSQL Database)
+  db:
+    image: postgres:14
+    environment:
+        POSTGRES_DB: ${POSTGRES_DB}              # Loaded from .env
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}     # Loaded from .env
+        POSTGRES_USER: ${POSTGRES_USER}
     volumes:
-      - ./app:/app                          # Code — hot-reload in dev
-      - ./data:/data                        # Input/processed Excel & PDFs
-      - ./logs:/logs                        # Logs persistence (optional)
-    env_file:
-      - .env                                # Loads Gemini key, WhatsApp tokens, etc.
-    ports:
-      - "5001:5000"                         # Direct mapping
-    command: python -u /app/whatsapp_bot.py # Actually runs your bot
-    
-  redis:
-    image: redis:alpine
-    container_name: sociomed-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"          # Only for testing — you can remove later
-    volumes:
-      - redis_data:/data     # Saves data even if container restarts
+        odoo-db-data:/var/lib/postgresql/data
 
-  celery-worker:
-    build: .
-    command: celery -A whatsapp_bot.celery worker --loglevel=info
-    volumes:
-      - ./app:/app
-      - ./data:/data
-      - ./logs:/logs
-    env_file:
-      - .env
+  # 3. THE MOUTH (Your WhatsApp Bot)
+  whatsapp-bot:
+    build: ./app
+    restart: always
+    environment:
+        ODOO_URL: http://web:8069  # Bot talks to Odoo internally
+        ODOO_DB: db
+        ODOO_USER: odd
+        ODOO_PASSWORD: ${ODOO_PASSWORD} 
     depends_on:
-      - sociomed-redis
-      - sociomed-database
-    restart: unless-stopped
+        web
 
 volumes:
-  pg_data:
-  redis_data: 
+  odoo-web-data:
+  odoo-db-data:
