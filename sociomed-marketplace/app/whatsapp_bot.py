@@ -325,6 +325,60 @@ def handle_simple_search(user_query, user_phone=None):
     # (The list formatter already works with the dict structure we returned above)
     return create_product_list_payload(products), True
 
+def handle_search(query):
+    products = odoo.search_products(query)
+    
+    if not products:
+        return "❌ No items found. Try a broader term."
+        
+    # Format the Interactive List
+    sections = []
+    
+    # Section 1: Top Matches
+    rows = []
+    for p in products[:5]:
+        desc = f"{p['price']:,.0f} UGX | {p['availability']}"
+        rows.append({
+            "id": f"ADD_{p['id']}",
+            "title": p['name'][:24],
+            "description": desc
+        })
+        
+    sections.append({"title": "Results", "rows": rows})
+    
+    # Section 2: Quick Actions
+    sections.append({
+        "title": "Actions", 
+        "rows": [{"id": "CMD_CART", "title": "View Cart", "description": "Checkout now"}]
+    })
+    
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": "Select an item to add to your quote:"},
+            "action": {"button": "View Items", "sections": sections}
+        }
+    }
+    
+def handle_add_to_cart_logic(user_id, product_id):
+    # 1. Add item to Redis Cart
+    cart_manager.add_item(user_id, product_id, 1)
+    
+    # 2. PROACTIVE SALES AGENT: Check for Consumables
+    recs = odoo.get_product_recommendations(int(product_id))
+    
+    response_text = "✅ Added to cart."
+    
+    # If we have consumables (e.g., Reagents for a Machine), suggest them immediately
+    if recs['consumables']:
+        response_text += "\n\n💡 *Frequently bought together:*"
+        for acc in recs['consumables'][:3]:
+            response_text += f"\n- {acc['name']} ({acc['list_price']:,.0f} UGX)"
+        response_text += "\n\nReply with Item Name to add these."
+        
+    return response_text
+    
 def handle_quote_command(recipient_id, text):
     # ... [Keep your existing cart retrieval logic] ...
     cart_items = cart_manager.get_cart(recipient_id)
