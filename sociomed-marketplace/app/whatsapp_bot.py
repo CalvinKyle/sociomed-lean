@@ -92,6 +92,24 @@ class RedisCartManager:
         redis_client.expire(key, 86400)  # Cart expires after 24 hours
         logger.info(f"Added {product_name} to cart for {phone}")
 
+    def add_item(self, phone: str, product_id: int, quantity: int = 1):
+        """Add item by product_id only – fetch name/price from Odoo"""
+        product = odoo.get_product_by_id(product_id)
+        if not product:
+            raise ValueError("Product not found")
+        
+        key = f"cart:{phone}"
+        item = {
+            "product_id": str(product_id),
+            "product_name": product['name'],
+            "price": float(product['list_price']),
+            "quantity": quantity,
+            "added_at": datetime.utcnow().isoformat()
+        }
+        redis_client.rpush(key, json.dumps(item))
+        redis_client.expire(key, 86400 * 7)  # Extended to 7 days for better UX
+        logger.info(f"Added {product['name']} (x{quantity}) to cart for {phone}")
+
     def get_cart(self, phone: str):
         key = f"cart:{phone}"
         items_raw = redis_client.lrange(key, 0, -1)
@@ -363,7 +381,7 @@ def handle_search(query):
     
 def handle_add_to_cart_logic(user_id, product_id):
     # 1. Add item to Redis Cart
-    cart_manager.add_item(user_id, product_id, 1)
+    cart_manager.add_item(user_id, int(product_id), 1)
     
     # 2. PROACTIVE SALES AGENT: Check for Consumables
     recs = odoo.get_product_recommendations(int(product_id))
