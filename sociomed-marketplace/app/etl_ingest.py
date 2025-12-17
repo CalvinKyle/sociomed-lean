@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import traceback
 import hashlib
-
 import google.generativeai as genai
 from pypdf import PdfReader
 import pandas as pd
+from dotenv import load_dotenv
+load_dotenv()
 
 # -------------------------- CONFIGURATION --------------------------
 # Ensure you set this in your .env file
