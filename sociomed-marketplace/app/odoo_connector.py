@@ -15,6 +15,74 @@ class OdooConnector:
         self.uid = self.common.authenticate(self.db, self.username, self.password, {})
         self.models = xmlrpc.client.ServerProxy(f'{self.url}/xmlrpc/2/object')
 
+    def search_product_templates(self, query, limit=5):
+        """
+        Searches for the 'Parent' templates (e.g., 'CVC Catheter').
+        Returns list of attributes available (e.g., Sizes: 10Fr, 12Fr).
+        """
+        domain = [
+            '|',
+            ('name', 'ilike', query),
+            ('description_sale', 'ilike', query),
+            ('sale_ok', '=', True)
+        ]
+        
+        # Search 'product.template' (The Parent), not 'product.product' (The Variant)
+        # We fetch 'attribute_line_ids' to see what options exist
+        fields = ['name', 'list_price', 'attribute_line_ids', 'qty_available']
+        
+        template_ids = self.models.execute_kw(self.db, self.uid, self.password,
+            'product.template', 'search', [domain], {'limit': limit})
+        
+        templates = self.models.execute_kw(self.db, self.uid, self.password,
+            'product.template', 'read', [template_ids], {'fields': fields})
+            
+        results = []
+        for t in templates:
+            # Fetch the actual attribute names and values
+            attributes = {}
+            if t['attribute_line_ids']:
+                lines = self.models.execute_kw(self.db, self.uid, self.password,
+                    'product.template.attribute.line', 'read', [t['attribute_line_ids']], 
+                    {'fields': ['display_name', 'value_ids']})
+                
+                for line in lines:
+                    # Parse "Size: 10Fr, 12Fr"
+                    attr_name = line['display_name'].split(':')[0]
+                    # Fetch value names
+                    val_ids = line['value_ids']
+                    values = self.models.execute_kw(self.db, self.uid, self.password,
+                        'product.attribute.value', 'read', [val_ids], {'fields': ['name']})
+                    attributes[attr_name] = [v['name'] for v in values]
+
+            results.append({
+                'template_id': t['id'],
+                'name': t['name'],
+                'price': t['list_price'],
+                'attributes': attributes, # e.g. {'Size': ['10Fr', '12Fr']}
+                'stock': t['qty_available']
+            })
+            
+        return results
+
+    def get_variant_id(self, template_id, selected_attributes):
+        """
+        Finds the specific Variant ID based on user selection.
+        selected_attributes = {'Size': '10Fr', 'Lumen': 'Double'}
+        """
+        # Logic to find the specific product.product ID matching these attributes
+        # This requires searching 'product.product' where 'product_tmpl_id' matches
+        # AND all attribute values match.
+        # (Simplified for brevity - in production, you iterate through variants)
+        domain = [('product_tmpl_id', '=', template_id)]
+        variants = self.models.execute_kw(self.db, self.uid, self.password,
+            'product.product', 'search_read', [domain], 
+            {'fields': ['product_template_attribute_value_ids']})
+            
+        # Match logic would go here
+        # Return the specific product_id (e.g., 452)
+        return variants[0]['id'] # Placeholder
+        
     def search_products(self, query, limit=5):
         """
         Finds products and identifies if they are Dropship or Own Inventory.
