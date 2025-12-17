@@ -2,85 +2,90 @@ import xmlrpc.client
 import os
 import logging
 
-# Configure logging to track errors
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class OdooConnector:
     def __init__(self):
-        # Load credentials from environment variables
         self.url = os.getenv("ODOO_URL")
         self.db = os.getenv("ODOO_DB")
         self.username = os.getenv("ODOO_USER")
         self.password = os.getenv("ODOO_PASSWORD")
-        
-        try:
-            # Connect to Odoo
-            self.common = xmlrpc.client.ServerProxy('{}/xmlrpc/2/common'.format(self.url))
-            self.uid = self.common.authenticate(self.db, self.username, self.password, {})
-            self.models = xmlrpc.client.ServerProxy('{}/xmlrpc/2/object'.format(self.url))
-            logger.info("✅ Connected to Odoo ERP successfully.")
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to Odoo: {e}")
-            raise
+        self.common = xmlrpc.client.ServerProxy(f'{self.url}/xmlrpc/2/common')
+        self.uid = self.common.authenticate(self.db, self.username, self.password, {})
+        self.models = xmlrpc.client.ServerProxy(f'{self.url}/xmlrpc/2/object')
 
-    def search_products(self, query, limit=7):
+    def search_products(self, query, limit=5):
         """
-        Search for products in Odoo.
-        Smart Logic: Distinguishes between 'In Stock' and 'Partner Stock'.
+        Finds products and identifies if they are Dropship or Own Inventory.
         """
-        # Search for items that look like the query AND are sellable
         domain = [
-            '|', 
-            ('name', 'ilike', query), 
-            ('default_code', 'ilike', query), # Searches SKU
-            ('sale_ok', '=', True),           # Must be a sellable item
-            ('is_published', '=', True)       # Must be published on website
+            '|', '|',
+            ('name', 'ilike', query),
+            ('default_code', 'ilike', query),  # SKU match
+            ('description_sale', 'ilike', query),
+            ('sale_ok', '=', True)
         ]
         
-        # 1. Find Product IDs
+        # Fetch fields including 'accessory_product_ids' for recommendations
+        fields = ['name', 'default_code', 'list_price', 'qty_available', 
+                  'uom_id', 'seller_ids', 'accessory_product_ids', 'alternative_product_ids']
+        
         product_ids = self.models.execute_kw(self.db, self.uid, self.password,
             'product.product', 'search', [domain], {'limit': limit})
-        
-        if not product_ids:
-            return []
-
-        # 2. Get Details (Price, Stock, and Vendor Info)
-        fields = ['name', 'default_code', 'list_price', 'qty_available', 
-                  'uom_id', 'description_sale', 'seller_ids']
         
         products = self.models.execute_kw(self.db, self.uid, self.password,
             'product.product', 'read', [product_ids], {'fields': fields})
             
-        formatted_products = []
+        results = []
         for p in products:
-            # LOGIC: If we have 0 stock, but a Vendor is listed, it's a Partner Item.
+            # Business Logic: Inventory Source
             stock = p['qty_available']
-            is_partner_stock = stock <= 0 and p['seller_ids']
+            is_dropship = stock <= 0 and p['seller_ids']
             
-            availability_label = ""
-            if stock > 0:
-                availability_label = f"In Stock: {int(stock)}"
-            elif is_partner_stock:
-                availability_label = "✅ Available (Direct from Partner)" 
-            else:
-                availability_label = "Out of Stock"
-
-            formatted_products.append({
-                'product_id': p['id'],
+            availability = "In Stock" if stock > 0 else ("Available via Partner" if is_dropship else "Out of Stock")
+            
+            results.append({
+                'id': p['id'],
                 'name': p['name'],
+                'sku': p['default_code'],
                 'price': p['list_price'],
-                'currency': 'UGX', 
-                'availability': availability_label,
-                'manufacturer': p.get('default_code', 'Generic'), 
-                'description': p.get('description_sale', '') or p['name']
+                'availability': availability,
+                'has_accessories': bool(p['accessory_product_ids']), # Flag for the bot to check
+                'has_alternatives': bool(p['alternative_product_ids'])
             })
+        return results
+
+    def get_product_recommendations(self, product_id):
+        """
+        Fetches Cross-sells (Reagents/Consumables) and Upsells (Substitutes).
+        """
+        product = self.models.execute_kw(self.db, self.uid, self.password,
+            'product.product', 'read', [product_id], 
+            {'fields': ['accessory_product_ids', 'alternative_product_ids']})[0]
             
-        return formatted_products
+        recs = {'consumables': [], 'substitutes': []}
+        
+        # Fetch details for Accessories (Consumables)
+        if product['accessory_product_ids']:
+            acc_ids = product['accessory_product_ids']
+            acc_details = self.models.execute_kw(self.db, self.uid, self.password,
+                'product.product', 'read', [acc_ids], {'fields': ['name', 'list_price']})
+            recs['consumables'] = acc_details
+
+        # Fetch details for Alternatives (Substitutes)
+        if product['alternative_product_ids']:
+            alt_ids = product['alternative_product_ids']
+            alt_details = self.models.execute_kw(self.db, self.uid, self.password,
+                'product.product', 'read', [alt_ids], {'fields': ['name', 'list_price']})
+            recs['substitutes'] = alt_details
+            
+        return recs
 
     def create_quotation(self, customer_phone, line_items):
         """
-        Creates a formal Quote in Odoo for the customer.
+        Creates a formal Quote in Odoo for the customer. If item is a 'Kit' (Bundle), Odoo automatically expands it on the Delivery Slip,
+        but keeps it as one line on the Quote (Sales Order).
         """
         # 1. Find or Create Customer by Phone
         partner_ids = self.models.execute_kw(self.db, self.uid, self.password,
