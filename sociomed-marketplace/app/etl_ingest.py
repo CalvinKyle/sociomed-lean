@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import traceback
 import hashlib
+
 import google.generativeai as genai
 from pypdf import PdfReader
 import pandas as pd
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -26,16 +28,26 @@ MAX_PDF_SIZE_DIRECT_UPLOAD = 10 * 1024 * 1024  # 10MB limit for direct API uploa
 API_RETRY_ATTEMPTS = 3
 API_RETRY_DELAY = 2
 
-# Directory Structure
-BASE_DIR = "/app/data"  # Adjust based on your Docker structure
+# --- FIX FOR MACOS: USE RELATIVE PATHS ---
+# 1. Find out where this script is running from
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Go up one level to the main project folder (sociomed-marketplace)
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+
+# 3. Define the data folders inside your project
+BASE_DIR = os.path.join(PROJECT_ROOT, "data")
 RAW_PDF_DIR = os.path.join(BASE_DIR, "inputs")
 PROCESSED_PDF_DIR = os.path.join(BASE_DIR, "processed")
 FAILED_PDF_DIR = os.path.join(BASE_DIR, "failed")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
-LOG_FILE = "/app/logs/etl_ingest.log"
 
-# Create directories if they don't exist
-for directory in [RAW_PDF_DIR, PROCESSED_PDF_DIR, FAILED_PDF_DIR, OUTPUT_DIR, os.path.dirname(LOG_FILE)]:
+# 4. Define the log file location
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+LOG_FILE = os.path.join(LOG_DIR, "etl_ingest.log")
+
+# Create these folders if they don't exist
+for directory in [RAW_PDF_DIR, PROCESSED_PDF_DIR, FAILED_PDF_DIR, OUTPUT_DIR, LOG_DIR]:
     Path(directory).mkdir(parents=True, exist_ok=True)
 
 # -------------------------- LOGGING --------------------------
@@ -328,3 +340,4 @@ def run_pipeline():
 
 if __name__ == "__main__":
     run_pipeline()
+
