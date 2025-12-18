@@ -1,14 +1,15 @@
-sociomed-marketplace/
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-├── data/
-│   ├── inputs/                  # Place your PDFs (Pricelists, Catalogues) here
-│   └── outputs/                 # Generated quotes go here
-├── db/
-│   └── marketplace_schema.sql   # Database initialization
-└── src/
-    ├── etl_ingest.py            # PDF -> Gemini -> DB Pipeline
-    ├── whatsapp_bot.py          # Flask Webhook & Logic
-    ├── generate_quote.py        # PDF Generation Logic
-    └── recommendation_engine.py # Cross-sell/Upsell Logic
+sociomed-marketplace/ (Root of your GitHub Repo)
+├── app/                        <-- YOUR BOT CODE (The "Sales Agent")
+│   ├── whatsapp_bot.py        
+│   ├── odoo_connector.py       (The new connector we created)
+│   ├── requirements.txt       
+│   └── Dockerfile             
+│
+├── odoo_custom_addons/         <-- ODOO CUSTOMIZATIONS (Optional)
+│   └── sociomed_theme/         (If you eventually design a custom look)
+│
+├── data/                       <-- YOUR EXCEL FILES (For Import)
+│   └── products_cleaned.csv    (The clean file for Odoo import)
+│
+├── docker-compose.yml          <-- THE CONDUCTOR (Runs everything)
+└── .env                        <-- PASSWORDS & KEYS

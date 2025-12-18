@@ -5,7 +5,7 @@ import csv
 import redis
 import io
 from flask import Flask, request, jsonify, Response
-from sqlalchemy import create_engine, text
+from app.odoo_connector import OdooConnector
 import time
 import google.generativeai as genai
 from typing import Dict, List, Tuple, Optional, Any
@@ -15,6 +15,7 @@ from collections import defaultdict
 import uuid
 from functools import wraps
 from celery import Celery
+from app.recommendation_engine import get_recommendations
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sociomed_user:password@sociomed-database:5432/sociomed")
@@ -34,6 +35,12 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- INITIALIZE COMPONENTS ---
+# Initialize Odoo Connection
+try:
+    odoo = OdooConnector()
+except:
+    print("⚠️ Odoo not configured. Bot will fail.") 
+
 # Database
 try:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
@@ -84,6 +91,24 @@ class RedisCartManager:
         redis_client.rpush(key, json.dumps(item))
         redis_client.expire(key, 86400)  # Cart expires after 24 hours
         logger.info(f"Added {product_name} to cart for {phone}")
+
+    def add_item(self, phone: str, product_id: int, quantity: int = 1):
+        """Add item by product_id only – fetch name/price from Odoo"""
+        product = odoo.get_product_by_id(product_id)
+        if not product:
+            raise ValueError("Product not found")
+        
+        key = f"cart:{phone}"
+        item = {
+            "product_id": str(product_id),
+            "product_name": product['name'],
+            "price": float(product['list_price']),
+            "quantity": quantity,
+            "added_at": datetime.utcnow().isoformat()
+        }
+        redis_client.rpush(key, json.dumps(item))
+        redis_client.expire(key, 86400 * 7)  # Extended to 7 days for better UX
+        logger.info(f"Added {product['name']} (x{quantity}) to cart for {phone}")
 
     def get_cart(self, phone: str):
         key = f"cart:{phone}"
@@ -214,29 +239,66 @@ def add_recommendations_to_response(response_text: str, product_ids: List[str]) 
     return response_text
 
 def create_product_list_payload(products: List[Dict]) -> Dict:
-    """Generates a WhatsApp Interactive List Message payload"""
+    """Generates a WhatsApp List with Products AND Custom Action Buttons"""
+    # --- SECTION 1: QUICK ACTIONS (Your Confirmed Options) ---
+    # We define these first to ensure they always appear
+    action_rows = [
+        {
+            "id": "CMD_CART",
+            "title": "🛒 View Cart",
+            "description": "See items currently in your basket"
+        },
+        {
+            "id": "CMD_QUOTE",
+            "title": "📄 Generate Quote",
+            "description": "Create PDF quote from cart"
+        },
+        {
+            "id": "CMD_RECOMMEND",
+            "title": "💡 Recommendations",
+            "description": "View suggested items"
+        },
+        {
+            "id": "CMD_CATALOG",
+            "title": "📚 Download Catalog",
+            "description": "Get full price list PDF"
+        },
+        {
+            "id": "CMD_SUPPORT",
+            "title": "📞 Contact Support",
+            "description": "Chat with a human agent"
+        },
+        {
+            "id": "CMD_CLEAR",
+            "title": "❌ Clear Cart",
+            "description": "Empty your basket"
+        }
+    ]
+
+    # --- SECTION 2: PRODUCTS (Search Results) ---
+    # WhatsApp Limit: Max 10 items TOTAL.
+    # We have 6 actions, so we can show max 4 products.
+    product_rows = []
+    max_products = 10 - len(action_rows) # Dynamically calculate remaining slots
     
-    # WhatsApp Limit: Max 10 items per list section
-    limited_products = products[:10]
-    
-    rows = []
-    for p in limited_products:
-        # WhatsApp Strict Limits: Title max 24 chars, Desc max 72 chars
-        clean_title = p['name'][:23]  # Truncate to safe length
+    for p in products[:max_products]:
+        # Customize view: Brand | Stock
+        stock_qty = p.get('stock_qty', 0)
+        brand = p.get('manufacturer', 'Generic')[:15] 
         
-        # We store the command "ADD [ID]" in the invisible ID field
-        # So when they click it, the bot receives "ADD product_123"
+        # ID format: "ADD {id}" -> Triggers add-to-cart logic
         row_id = f"ADD {p['product_id']}"
+        title = p['name'][:23] # Max 24 chars
         
-        # Format price for the description
+        # Description: "Brand | 50 in stock | 5,000 UGX"
         currency = p.get('currency', 'UGX')
         price_str = f"{currency} {p['price']:,.0f}"
-        description = f"{price_str} | {p['availability']}"[:72]
+        desc = f"{brand} | Stock: {stock_qty} | {price_str}"[:72]
 
-        rows.append({
+        product_rows.append({
             "id": row_id, 
-            "title": clean_title,
-            "description": description
+            "title": title,
+            "description": desc
         })
 
     return {
@@ -245,20 +307,24 @@ def create_product_list_payload(products: List[Dict]) -> Dict:
             "type": "list",
             "header": {
                 "type": "text",
-                "text": "Search Results"
-            },
-            "body": {
-                "text": f"Found {len(products)} items. Tap 'View Items' to select."
-            },
-            "footer": {
                 "text": "SocioMed Marketplace"
             },
+            "body": {
+                "text": f"Found matching items.\nSelect an item to ADD to cart, or choose an action below."
+            },
+            "footer": {
+                "text": "Tap 'Menu' to start"
+            },
             "action": {
-                "button": "View Items",
+                "button": "Open Menu",
                 "sections": [
                     {
-                        "title": "Available Products",
-                        "rows": rows
+                        "title": "📦 Available Products",
+                        "rows": product_rows
+                    },
+                    {
+                        "title": "⚡ Quick Actions",
+                        "rows": action_rows
                     }
                 ]
             }
@@ -266,30 +332,113 @@ def create_product_list_payload(products: List[Dict]) -> Dict:
     }
     
 # --- AI & HANDLERS ---
-def handle_simple_search(query: str, user_phone: str = None) -> Tuple[Any, bool]:
-    """Handle simple product searches with List Messages"""
-    products, found_in_master = search_master_database(query, user_phone=user_phone)
+def handle_simple_search(user_query, user_phone=None):
+    # 1. Call Odoo instead of SQL
+    products = odoo.search_products(user_query)
     
-    if not found_in_master:
-        return (
-            f"⚠️ We don't have '{query}' in our catalog yet.\n\n"
-            "📝 I have logged this request with our procurement team."
-        ), False
-    
-    # NEW: Return a Dictionary Payload instead of a String
+    if not products:
+        return "❌ We couldn't find any items matching that description.", False
+
+    # 2. Pass results to your existing list formatter
+    # (The list formatter already works with the dict structure we returned above)
     return create_product_list_payload(products), True
 
-def handle_quote_command(phone: str, message: str) -> Optional[str]:
-    message_lower = message.lower().strip()
+def handle_search(query):
+    products = odoo.search_products(query)
     
-    if message_lower.startswith('add '):
-        # Logic to handle adding by name or ID could go here
-        # For simplicity, we search and add the first result
-        item_name = message[4:].strip()
-        products, found = search_master_database(item_name, user_phone=phone, limit=1)
+    if not products:
+        return "❌ No items found. Try a broader term."
         
-        if not found:
-            return f"❌ '{item_name}' not found."
+    # Format the Interactive List
+    sections = []
+    
+    # Section 1: Top Matches
+    rows = []
+    for p in products[:5]:
+        desc = f"{p['price']:,.0f} UGX | {p['availability']}"
+        rows.append({
+            "id": f"ADD_{p['id']}",
+            "title": p['name'][:24],
+            "description": desc
+        })
+        
+    sections.append({"title": "Results", "rows": rows})
+    
+    # Section 2: Quick Actions
+    sections.append({
+        "title": "Actions", 
+        "rows": [{"id": "CMD_CART", "title": "View Cart", "description": "Checkout now"}]
+    })
+    
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": "Select an item to add to your quote:"},
+            "action": {"button": "View Items", "sections": sections}
+        }
+    }
+
+def handle_search(query):
+    # 1. Search Templates
+    results = odoo.search_product_templates(query)
+    
+    if not results:
+        return "❌ No items found."
+        
+    sections = []
+    for p in results[:5]:
+        # If product has options (Size, etc.), button triggers configuration
+        if p['attributes']:
+            desc = f"Options: {', '.join(p['attributes'].keys())} | {p['price']:,.0f} UGX"
+            btn_id = f"CONFIG_{p['template_id']}" # Trigger config flow
+        else:
+            desc = f"{p['price']:,.0f} UGX"
+            btn_id = f"ADD_{p['template_id']}" # Direct add
+            
+        sections.append({
+            "title": p['name'][:24], 
+            "description": desc,
+            "id": btn_id
+        })
+        
+    return create_list_message("Found Items", sections)
+
+def handle_config_selection(user_id, template_id, selection_step):
+    # Logic to ask for "Size" then "Lumen" using Interactive Buttons
+    # ...
+    return "Please select Size:" # With buttons [10Fr] [12Fr] 
+
+def handle_add_to_cart_logic(user_id, product_id):
+    # 1. Add item to Redis Cart
+    cart_manager.add_item(user_id, int(product_id), 1)
+    
+    # 2. PROACTIVE SALES AGENT: Check for Consumables
+    recs = odoo.get_product_recommendations(int(product_id))
+    
+    response_text = "✅ Added to cart."
+    
+    # If we have consumables (e.g., Reagents for a Machine), suggest them immediately
+    if recs['consumables']:
+        response_text += "\n\n💡 *Frequently bought together:*"
+        for acc in recs['consumables'][:3]:
+            response_text += f"\n- {acc['name']} ({acc['list_price']:,.0f} UGX)"
+        response_text += "\n\nReply with Item Name to add these."
+        
+    return response_text
+    
+def handle_quote_command(recipient_id, text):
+    # ... [Keep your existing cart retrieval logic] ...
+    cart_items = cart_manager.get_cart(recipient_id)
+    
+    # 3. Create Quote in Odoo
+    try:
+        order_ref = odoo.create_quotation(recipient_id, cart_items)
+        return (f"✅ *Quote Generated!* \n"
+                f"Reference: *{order_ref}*\n\n"
+                f"You will receive a PDF invoice shortly via email or you can view it on our website.")
+    except Exception as e:
+        return "⚠️ System Error: Could not generate quote. Please try again."
         
         product = products[0]
         item_id = cart_manager.add_to_cart(phone, product['product_id'], product['name'], product['price'])
@@ -402,13 +551,63 @@ def webhook():
 
                         # Now process 'user_text' as if the user typed it manually
                         if user_text:
-                            # 1. Check Quote Commands (ADD, CART, etc.)
+                                                    if user_text:
+                            # Handle Quick Action Commands first
+                            if user_text == "CMD_CART":
+                                user_text = "cart" 
+                                
+                            elif user_text == "CMD_QUOTE":
+                                user_text = "request quote"
+                                
+                            elif user_text == "CMD_CLEAR":
+                                cart_manager.clear_cart(recipient_id)
+                                send_whatsapp_message(recipient_id, "✅ Cart has been cleared.")
+                                continue
+                                
+                            elif user_text == "CMD_SUPPORT":
+                                msg = (
+                                    "📞 *Contact Support*\n\n"
+                                    "You can reach our agent at: +256 777411435\n"
+                                    "Or email us: info@socio-med.com\n"
+                                    "Working Hours: Mon-Fri, 8am - 5pm"
+                                )
+                                send_whatsapp_message(recipient_id, msg)
+                                continue
+                                
+                            elif user_text == "CMD_CATALOG":
+                                doc_payload = {
+                                    "type": "document",
+                                    "document": {
+                                        "link": "https://www.socio-med.com/files/2026_Catalog.pdf",
+                                        "caption": "📚 SocioMed 2026 General Catalog.pdf",
+                                        "filename": "SocioMed_Catalog.pdf"
+                                    }
+                                }
+                                send_whatsapp_message(recipient_id, doc_payload)
+                                continue
+
+                            elif user_text == "CMD_RECOMMEND":
+                                # ... keep your existing recommendation logic ...
+
+                            # NEW: Handle "ADD_{product_id}" from interactive list selection
+                            elif user_text.startswith("ADD_"):
+                                product_id = user_text.split("_", 1)[1]
+                                try:
+                                    response = handle_add_to_cart_logic(recipient_id, product_id)
+                                    send_whatsapp_message(recipient_id, response)
+                                    continue
+                                except Exception as e:
+                                    logger.error(f"Add to cart failed: {e}")
+                                    send_whatsapp_message(recipient_id, "⚠️ Could not add item. Please try again.")
+                                    continue
+
+                            # Existing quote/cart commands
                             quote_resp = handle_quote_command(recipient_id, user_text)
                             if quote_resp:
                                 send_whatsapp_message(recipient_id, quote_resp)
                                 continue
 
-                            # 2. Check Intent
+                            # Detect intent and handle search
                             intent = detect_intent(user_text)
                             
                             if intent["type"] == "greeting":
@@ -416,7 +615,7 @@ def webhook():
                                 send_whatsapp_message(recipient_id, resp)
                             
                             elif intent["type"] == "simple_search":
-                                resp, _ = handle_simple_search(user_text, user_phone=recipient_id)
+                                resp = handle_search(user_text)  # Now using the new unified handler
                                 send_whatsapp_message(recipient_id, resp)
                             
         return jsonify({"status": "processed"}), 200
