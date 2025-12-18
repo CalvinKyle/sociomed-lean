@@ -4,38 +4,50 @@ import glob
 import json
 import re
 import time
-import google.generativeai as genai
 import logging
+import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import traceback
+import hashlib
 
 import google.generativeai as genai
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import SQLAlchemyError
 from pypdf import PdfReader
+import pandas as pd
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # -------------------------- CONFIGURATION --------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is NOT set.")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MAX_PDF_SIZE_DIRECT_UPLOAD = 10 * 1024 * 1024  # 10MB (Gemini's limit for file upload)
-MAX_TEXT_LENGTH_DIRECT_PROCESSING = 15000  # Characters
-CHUNK_SIZE = 10000  # Characters for text chunking
+# Ensure you set this in your .env file
+GEMINI_API_KEY = ${GEMINI_API_KEY}
+
+# Settings
+MAX_PDF_SIZE_DIRECT_UPLOAD = 10 * 1024 * 1024  # 10MB limit for direct API upload
 API_RETRY_ATTEMPTS = 3
-API_RETRY_DELAY = 2  # seconds
+API_RETRY_DELAY = 2
 
-# Paths
-RAW_PDF_DIR = "/data/raw_pdfs"
-PROCESSED_PDF_DIR = "/data/processed"
-FAILED_PDF_DIR = "/data/failed"
-LOG_FILE = "/logs/etl_ingest.log"
+# --- FIX FOR MACOS: USE RELATIVE PATHS ---
+# 1. Find out where this script is running from
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Create directories
-for directory in [RAW_PDF_DIR, PROCESSED_PDF_DIR, FAILED_PDF_DIR]:
+# 2. Go up one level to the main project folder (sociomed-marketplace)
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+
+# 3. Define the data folders inside your project
+BASE_DIR = os.path.join(PROJECT_ROOT, "data")
+RAW_PDF_DIR = os.path.join(BASE_DIR, "inputs")
+PROCESSED_PDF_DIR = os.path.join(BASE_DIR, "processed")
+FAILED_PDF_DIR = os.path.join(BASE_DIR, "failed")
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+
+# 4. Define the log file location
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+LOG_FILE = os.path.join(LOG_DIR, "etl_ingest.log")
+
+# Create these folders if they don't exist
+for directory in [RAW_PDF_DIR, PROCESSED_PDF_DIR, FAILED_PDF_DIR, OUTPUT_DIR, LOG_DIR]:
     Path(directory).mkdir(parents=True, exist_ok=True)
 
 # -------------------------- LOGGING --------------------------
@@ -50,705 +62,282 @@ logging.basicConfig(
 logger = logging.getLogger("ETL_Ingest")
 
 # -------------------------- INITIALIZATION --------------------------
-# Validate API Key
 if not GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY environment variable is required")
+    logger.error("GEMINI_API_KEY environment variable is missing.")
     raise ValueError("GEMINI_API_KEY environment variable is required")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Database
-try:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
-    SessionLocal = sessionmaker(bind=engine)
-    logger.info("Database connection established")
-except Exception as e:
-    logger.error(f"Failed to connect to database: {e}")
-    raise
+# -------------------------- SMART PROMPTS --------------------------
+# This prompt is engineered to extract "Variants" (Generic Name + Attributes)
+EXTRACTION_PROMPT = """
+You are an expert medical equipment data analyst. Your goal is to extract product data from a supplier pricelist PDF and structure it for an Odoo ERP import.
 
-# -------------------------- PROMPTS --------------------------
-EXTRACTION_PROMPT_DIRECT = """
-You are an expert medical equipment data extractor analyzing a supplier pricelist PDF.
+**CRITICAL TASK: VARIANT DETECTION**
+You must distinguish between the "Generic Product" (Template) and the specific "Variant" (e.g., Size, Material).
+Example: "Foley Catheter 12Fr" and "Foley Catheter 14Fr" are the SAME generic product ("Foley Catheter") with different "Size" attributes.
 
-Extract structured data and return ONLY valid JSON matching this exact schema:
-
+Return ONLY valid JSON matching this schema:
 {
-  "supplier_name": "string (required)",
-  "supplier_code": "string (optional, infer from filename or content)",
-  "country": "string (optional)",
-  "contact_email": "string (optional)",
-  "currency": "string (e.g., 'USD', 'UGX', 'EUR')",
+  "supplier_name": "string (inferred from document)",
+  "supplier_code": "string (optional short code, e.g., 'STS')",
+  "currency": "string (e.g., 'UGX', 'USD')",
   "items": [
     {
-      "sku": "string (required, use 'UNKNOWN-{increment}' if missing)",
-      "name": "string (required, full product name)",
-      "description": "string (optional, specifications/details)",
-      "brand": "string (optional, manufacturer)",
-      "category": "string (required, choose: Surgical Instruments / Consumables / Diagnostics / Radiology / Laboratory / Cardiology / Orthopedics / General Medical)",
-      "price": 12.50,
-      "currency": "string (optional, defaults to parent currency)",
-      "moq": 100,
-      "unit": "piece | box | pack | set | case | kit",
-      "uom": "string (optional, unit of measure: 'pcs', 'boxes', 'pairs', etc.)"
+      "vendor_sku": "string (The specific code listed in the PDF. If missing, leave null)",
+      "generic_name": "string (The clean, parent name WITHOUT specific size/color info. e.g., 'Hemodialysis Catheter')",
+      "full_name": "string (The complete name as listed. e.g., 'Hemodialysis Catheter 12Fr Double Lumen')",
+      "description": "string (Technical specs, material, etc.)",
+      "category": "string (Classify into: Nephrology / Cardiology / Consumables / Instruments / Orthopedics / General)",
+      "price": 123000,
+      "moq": 1,
+      "uom": "string (Unit, Box of 10, Set, etc.)",
+      "lead_time_days": 14,
+      "attributes": {
+        "Size": "string (e.g., '12Fr', '10cm x 10cm')",
+        "Color": "string",
+        "Material": "string",
+        "Type": "string (e.g., 'Double Lumen', 'Curved')"
+      }
     }
   ]
 }
 
-STRICT RULES:
-1. Extract ALL products you find, even if some fields are incomplete
-2. If price is missing or unreadable → set price to 0 and add note in description
-3. Convert price to UGX 
-4. Infer supplier name from filename if not clear in document
-5. STRICTLY categorize items into ONLY these categories: medical equipment, devices, consumables, surgical instruments, reagents. If unsure, use 'general'. Do NOT invent new categories.
-6. For medical equipment: include size, dimensions, material when available
-7. Return ONLY JSON, no markdown, no explanations
-"""
-
-EXTRACTION_PROMPT_CHUNKED = """
-You are analyzing a CHUNK of a medical equipment pricelist PDF.
-
-Extract product information from this text chunk. Return ONLY a valid JSON list of objects.
-
-Schema for EACH item:
-{
-  "sku": "string (required, use 'UNKNOWN-{line-number}' if missing)",
-  "name": "string (required)",
-  "description": "string (optional, specifications)",
-  "brand": "string (optional, manufacturer)",
-  "category": "string (required)",
-  "price": 12.50,
-  "currency": "string (optional)",
-  "moq": 100,
-  "unit": "piece | box | pack | set"
-}
-
-RULES for this chunk:
-1. Extract all products found in this text section
-2. If price missing → set to 0
-3. Include supplier context if mentioned: {supplier_context}
-4. Focus on medical equipment terms: catheter, stent, glove, suture, scanner, etc.
-5. Return empty list [] if no products found
+**RULES:**
+1. **Generic Name:** Be aggressive in grouping. "Nitrile Gloves Small" and "Nitrile Gloves Large" -> Generic Name: "Nitrile Gloves".
+2. **Attributes:** Extract ANY distinguishing feature (Size, Volume, Gauge, Length) into the `attributes` dictionary.
+3. **Price:** Extract numerical value only. If missing, set to 0.
+4. **JSON Only:** Do not include markdown formatting or explanations.
 """
 
 # -------------------------- HELPER FUNCTIONS --------------------------
-def get_source_id(session, source_name="pdf_etl"):
-    """Fetches the ID for a data source name from config schema"""
-    result = session.execute(
-        text("SELECT source_id FROM config.data_sources WHERE source_name = :name"),
-        {"name": source_name}
-    ).scalar()
-    return result if result else 1 # Default to 1 (or handle error)
-    
 def clean_json_string(json_str: str) -> str:
-    """Advanced cleaning of Gemini response text"""
-    # Remove markdown code blocks
+    """Removes Markdown formatting and cleanup JSON string."""
     json_str = re.sub(r'```json\s*', '', json_str)
     json_str = re.sub(r'```', '', json_str)
-    
-    # Remove JavaScript-style comments
+    # Remove JS-style comments
     json_str = re.sub(r'//.*?\n', '', json_str)
-    json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
-    
-    # Fix trailing commas in JSON
-    json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
-    
-    # Remove non-JSON text before and after
-    lines = json_str.split('\n')
-    json_lines = []
-    in_json = False
-    
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('{') or stripped.startswith('['):
-            in_json = True
-        if in_json:
-            json_lines.append(line)
-        if stripped.endswith('}') or stripped.endswith(']'):
-            in_json = False
-    
-    return '\n'.join(json_lines).strip()
+    return json_str.strip()
 
-def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
-    """Extract text using PyPDF as fallback"""
-    try:
-        reader = PdfReader(pdf_path)
-        text_content = ""
-        
-        for page_num, page in enumerate(reader.pages):
-            extracted = page.extract_text()
-            if extracted:
-                text_content += f"--- Page {page_num + 1} ---\n{extracted}\n\n"
-        
-        if not text_content.strip():
-            logger.warning(f"No text extracted from {pdf_path}")
-            return None
-            
-        return text_content
-    except Exception as e:
-        logger.error(f"Failed to extract text from PDF {pdf_path}: {e}")
-        return None
+def generate_smart_sku(supplier_code: str, generic_name: str, attributes: Dict) -> str:
+    """
+    Generates a consistent SKU if the vendor didn't provide one.
+    Format: SUP-GENERIC-ATTR1-ATTR2
+    """
+    # Create base from Generic Name (e.g., "HEMO-CATH")
+    clean_name = re.sub(r'[^a-zA-Z0-9]', '', generic_name.upper())[:8]
+    base = f"{supplier_code}-{clean_name}"
+    
+    # Append Attributes (e.g., "-12FR-DOUBLE")
+    attr_parts = []
+    for k, v in attributes.items():
+        val_clean = re.sub(r'[^a-zA-Z0-9]', '', str(v).upper())[:6]
+        attr_parts.append(val_clean)
+    
+    if attr_parts:
+        return f"{base}-" + "-".join(attr_parts)
+    
+    # Fallback unique ID if no attributes
+    unique_suffix = hashlib.md5(f"{generic_name}{time.time()}".encode()).hexdigest()[:4].upper()
+    return f"{base}-{unique_suffix}"
 
-def infer_supplier_from_filename(filename: str) -> Tuple[str, Optional[str]]:
-    """Extract supplier name and code from filename"""
-    # Common patterns in medical supplier filenames
-    filename = Path(filename).stem  # Remove extension
-    
-    # Patterns: SupplierName_Catalog_2024.pdf, Medtronic-PriceList.pdf, JNJ_Products.pdf
-    patterns = [
-        (r'^([A-Z][A-Za-z\s&]+)_', 'supplier'),  # GE_Healthcare_Catalog
-        (r'^([A-Za-z]+)-', 'supplier'),  # Boston-Scientific
-        (r'([A-Z]{3,5})_', 'code'),  # BSC_Catalog, JNJ_Price
-    ]
-    
-    supplier_name = None
-    supplier_code = None
-    
-    for pattern, pattern_type in patterns:
-        match = re.search(pattern, filename)
-        if match:
-            if pattern_type == 'supplier':
-                supplier_name = match.group(1).replace('_', ' ').title()
-            elif pattern_type == 'code':
-                supplier_code = match.group(1)
-    
-    # Fallback: Use filename as supplier name
+def infer_supplier_code(supplier_name: str) -> str:
+    """Generates a 3-letter code from supplier name."""
     if not supplier_name:
-        # Clean the filename
-        supplier_name = re.sub(r'[_\-]', ' ', filename)
-        supplier_name = re.sub(r'\s+(Catalog|Price|List|Products|202[0-9])', '', supplier_name, flags=re.IGNORECASE)
-        supplier_name = supplier_name.strip().title()
-    
-    return supplier_name, supplier_code
+        return "SUP"
+    # Take first 3 letters of first word, or Initials
+    parts = supplier_name.split()
+    if len(parts) > 1:
+        return "".join([p[0] for p in parts[:3]]).upper()
+    return supplier_name[:3].upper()
 
-def convert_currency(amount: float, from_currency: str, to_currency: str = "UGX") -> Optional[float]:
-    """Simple currency conversion (in production, use real API)"""
-    # Hardcoded rates for demo - in production use API like exchangerate-api.com
-    conversion_rates = {
-        "UGX": 0.00027,  # UGX to USD
-        "KES": 0.0078,   # KES to USD
-        "TZS": 0.00043,  # TZS to USD
-        "EUR": 1.08,     # EUR to USD
-        "GBP": 1.27,     # GBP to USD
-    }
-    
-    if from_currency.upper() == to_currency.upper():
-        return amount
-    
-    if from_currency.upper() in conversion_rates:
-        return amount * conversion_rates[from_currency.upper()]
-    
-    logger.warning(f"Unknown currency: {from_currency}, assuming {to_currency}")
-    return amount  # Assume same currency if unknown
-
-def normalize_product_data(item: Dict, supplier_context: Dict) -> Dict:
-    """Clean and normalize extracted product data"""
-    normalized = item.copy()
-    
-    # Ensure required fields
-    if not normalized.get('sku'):
-        normalized['sku'] = f"UNKNOWN-{int(time.time() * 1000) % 10000}"
-    
-    if not normalized.get('name'):
-        normalized['name'] = f"Unnamed Product {normalized['sku']}"
-    
-    # Clean price
-    price = normalized.get('price')
-    if isinstance(price, str):
-        # Remove currency symbols, commas, etc.
-        price = re.sub(r'[^\d.]', '', price)
-        try:
-            normalized['price'] = float(price)
-        except:
-            normalized['price'] = 0.0
-            logger.warning(f"Could not parse price: {item.get('price')}")
-    elif not isinstance(price, (int, float)):
-        normalized['price'] = 0.0
-    
-    # Set currency
-    if not normalized.get('currency') and supplier_context.get('currency'):
-        normalized['currency'] = supplier_context['currency']
-    elif not normalized.get('currency'):
-        normalized['currency'] = 'USD'
-    
-    # Convert to USD if needed
-    if normalized['currency'] != 'USD' and normalized['price'] > 0:
-        usd_price = convert_currency(normalized['price'], normalized['currency'])
-        if usd_price:
-            normalized['price_usd'] = usd_price
-            normalized['original_price'] = normalized['price']
-            normalized['original_currency'] = normalized['currency']
-            normalized['price'] = usd_price
-            normalized['currency'] = 'USD'
-    
-    # Set category
-    if not normalized.get('category'):
-        # Infer from name
-        name_lower = normalized['name'].lower()
-        if any(term in name_lower for term in ['glove', 'gown', 'mask', 'syringe']):
-            normalized['category'] = 'Consumables'
-        elif any(term in name_lower for term in ['catheter', 'stent', 'implant']):
-            normalized['category'] = 'Cardiology'
-        elif any(term in name_lower for term in ['x-ray', 'ultrasound', 'mri', 'ct']):
-            normalized['category'] = 'Radiology'
-        else:
-            normalized['category'] = 'General Medical'
-    
-    # Clean description
-    if normalized.get('description'):
-        # Limit length
-        normalized['description'] = normalized['description'][:500]
-    
-    return normalized
-
-# -------------------------- EXTRACTION FUNCTIONS --------------------------
-def extract_with_gemini_direct(pdf_path: str, retry_count: int = API_RETRY_ATTEMPTS) -> Optional[Dict]:
-    """Direct PDF upload to Gemini (for smaller files)"""
-    for attempt in range(retry_count):
-        try:
-            logger.info(f"Direct Gemini extraction (attempt {attempt + 1}) for {Path(pdf_path).name}")
-            
-            # Get file size
-            file_size = os.path.getsize(pdf_path)
-            if file_size > MAX_PDF_SIZE_DIRECT_UPLOAD:
-                logger.warning(f"File too large for direct upload: {file_size/1024/1024:.1f}MB")
-                return None
-            
-            # Upload and process
-            uploaded_file = genai.upload_file(pdf_path)
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            
-            # Add filename context to prompt
-            filename = Path(pdf_path).name
-            supplier_name, supplier_code = infer_supplier_from_filename(filename)
-            enhanced_prompt = EXTRACTION_PROMPT_DIRECT + f"\n\nFilename: {filename}\nInferred supplier: {supplier_name}"
-            
-            response = model.generate_content([enhanced_prompt, uploaded_file])
-            
-            # Clean and parse response
-            clean_response = clean_json_string(response.text)
-            data = json.loads(clean_response)
-            
-            # Add inferred supplier if missing
-            if not data.get('supplier_name') and supplier_name:
-                data['supplier_name'] = supplier_name
-            if supplier_code and not data.get('supplier_code'):
-                data['supplier_code'] = supplier_code
-            
-            logger.info(f"Successfully extracted {len(data.get('items', []))} items via direct upload")
-            return data
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error (attempt {attempt + 1}): {e}")
-            logger.debug(f"Raw response: {response.text[:500]}...")
-            if attempt < retry_count - 1:
-                time.sleep(API_RETRY_DELAY * (2 ** attempt))  # Exponential backoff
-            else:
-                return None
-        except Exception as e:
-            logger.error(f"Direct extraction failed (attempt {attempt + 1}): {e}")
-            if attempt < retry_count - 1:
-                time.sleep(API_RETRY_DELAY * (2 ** attempt))
-            else:
-                return None
-    
-    return None
-
-def extract_with_gemini_chunked(text: str, filename: str, retry_count: int = API_RETRY_ATTEMPTS) -> Optional[Dict]:
-    """Process text chunks through Gemini"""
-    supplier_name, supplier_code = infer_supplier_from_filename(filename)
-    
-    # Split text into chunks
-    chunks = [text[i:i + CHUNK_SIZE] for i in range(0, len(text), CHUNK_SIZE)]
-    logger.info(f"Split into {len(chunks)} chunks of {CHUNK_SIZE} chars each")
-    
-    all_items = []
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    
-    for chunk_idx, chunk in enumerate(chunks):
-        for attempt in range(retry_count):
-            try:
-                logger.info(f"Processing chunk {chunk_idx + 1}/{len(chunks)} (attempt {attempt + 1})")
-                
-                # Prepare chunk-specific prompt
-                supplier_context = {
-                    'name': supplier_name,
-                    'code': supplier_code,
-                    'filename': filename
-                }
-                
-                chunk_prompt = EXTRACTION_PROMPT_CHUNKED.format(
-                    supplier_context=json.dumps(supplier_context, indent=2)
-                )
-                
-                response = model.generate_content([chunk_prompt, chunk])
-                clean_response = clean_json_string(response.text)
-                chunk_data = json.loads(clean_response)
-                
-                if chunk_data and isinstance(chunk_data, list):
-                    # Normalize items and add supplier context
-                    for item in chunk_data:
-                        item['chunk_source'] = chunk_idx + 1
-                        normalized = normalize_product_data(item, supplier_context)
-                        all_items.append(normalized)
-                    
-                    logger.info(f"Extracted {len(chunk_data)} items from chunk {chunk_idx + 1}")
-                
-                break  # Success, move to next chunk
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON error in chunk {chunk_idx + 1} (attempt {attempt + 1}): {e}")
-                if attempt < retry_count - 1:
-                    time.sleep(API_RETRY_DELAY * (2 ** attempt))
-                else:
-                    logger.warning(f"Skipping chunk {chunk_idx + 1} after {retry_count} failures")
-            except Exception as e:
-                logger.error(f"Chunk processing error {chunk_idx + 1} (attempt {attempt + 1}): {e}")
-                if attempt < retry_count - 1:
-                    time.sleep(API_RETRY_DELAY * (2 ** attempt))
-                else:
-                    logger.warning(f"Skipping chunk {chunk_idx + 1} after {retry_count} failures")
-        
-        # Rate limiting between chunks
-        time.sleep(1)
-    
-    if not all_items:
-        logger.warning(f"No items extracted from text for {filename}")
-        return None
-    
-    # Compile final result
-    result = {
-        "supplier_name": supplier_name,
-        "supplier_code": supplier_code,
-        "filename": filename,
-        "extraction_method": "chunked_text",
-        "items": all_items
-    }
-    
-    logger.info(f"Extracted total {len(all_items)} items via chunked processing")
-    return result
-
-# -------------------------- DATABASE FUNCTIONS --------------------------
-def upsert_supplier(session, supplier_data: Dict) -> int:
-    """Upsert supplier with enhanced details"""
-    result = session.execute(
-        text("""
-            INSERT INTO suppliers (name, code, country, contact_email, data_source, metadata)
-            VALUES (:name, :code, :country, :email, :source, :metadata::jsonb)
-            ON CONFLICT (name) DO UPDATE SET
-                code = COALESCE(EXCLUDED.code, suppliers.code),
-                country = COALESCE(EXCLUDED.country, suppliers.country),
-                contact_email = COALESCE(EXCLUDED.contact_email, suppliers.contact_email),
-                data_source = EXCLUDED.data_source,
-                metadata = COALESCE(suppliers.metadata, '{}'::jsonb) || EXCLUDED.metadata,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id
-        """),
-        {
-            "name": supplier_data.get("supplier_name", "Unknown Supplier"),
-            "code": supplier_data.get("supplier_code"),
-            "country": supplier_data.get("country", ""),
-            "email": supplier_data.get("contact_email", ""),
-            "source": supplier_data.get("filename", "manual"),
-            "metadata": json.dumps({
-                "extraction_method": supplier_data.get("extraction_method", "unknown"),
-                "processed_at": datetime.now().isoformat()
-            })
-        }
-    )
-    return result.scalar_one()
-
-def upsert_product(session, item: Dict, supplier_id: int) -> Tuple[int, bool]:
-    # 1. Get Source ID for PDF
-    source_id = get_source_id(session, "pdf_etl")
-    
-    # 2. Check for existing product (Using inventory schema)
-    existing = session.execute(
-        text("""
-            SELECT product_id, primary_source_id FROM inventory.products 
-            WHERE sku = :sku
-        """),
-        {"sku": item.get("sku")}
-    ).fetchone()
-
-    if existing:
-        product_id, current_source_id = existing
-        # LOGIC: Only update if current source is NOT 'excel_import' (ID 10 vs 50)
-        # We assume lower priority ID = High Authority (e.g. Excel=10, PDF=50)
-        # We check the priority of the current source vs incoming
-        current_priority = session.execute(text("SELECT priority FROM config.data_sources WHERE source_id=:sid"), {"sid": current_source_id}).scalar()
-        incoming_priority = 50 # PDF priority
-        
-        if incoming_priority < current_priority:
-             # Perform Update
-             pass 
-        return product_id, False
-    else:
-        # 3. Insert New (Using inventory schema)
-        result = session.execute(
-            text("""
-                INSERT INTO inventory.products (
-                    sku, name, description, brand, category, 
-                    unit_of_measure, specifications, primary_source_id, embedding
-                )
-                VALUES (
-                    :sku, :name, :desc, :brand, :category, 
-                    :unit, :specs::jsonb, :src_id, :emb
-                )
-                RETURNING product_id
-            """),
-            {
-                "sku": item.get("sku"),
-                "name": item.get("name"),
-                "desc": item.get("description", ""),
-                "brand": item.get("brand"),
-                "category": item.get("category", "GENERAL"),
-                "unit": item.get("unit", "UNIT"),
-                "specs": json.dumps(item),
-                "src_id": source_id,
-                "emb": None # Embedding is generated later or passed here if calculated
-            }
-        )
-        return result.scalar_one(), True
-
-    # Generate embedding from description
-    description = product.get('full_description') or product.get('short_description') or product['name']
-    if description and gemini_model:
-        try:
-            result = genai.embed_content(
-                model="models/embedding-001",
-                content=description,
-                task_type="retrieval_document"
-            )
-            embedding = result['embedding']
-            
-            # Save to database
-            session.execute(
-                text("UPDATE products SET embedding = :emb WHERE id = :pid"),
-                {"emb": embedding, "pid": product_id}
-            )
-            session.commit()
-            logger.info(f"Created smart embedding for {product['name']}")
-        except Exception as e:
-            logger.error(f"Embedding error: {e}")
-
-def upsert_offering(session, product_id: int, supplier_id: int, item: Dict):
-    """Upsert product offering with price history tracking"""
-    session.execute(
-        text("""
-            INSERT INTO product_offerings (product_id, supplier_id, price, currency, moq, is_active, metadata)
-            VALUES (:pid, :sid, :price, :curr, :moq, true, :metadata::jsonb)
-            ON CONFLICT (product_id, supplier_id) DO UPDATE SET
-                price = EXCLUDED.price,
-                currency = EXCLUDED.currency,
-                moq = EXCLUDED.moq,
-                is_active = true,
-                last_updated = CURRENT_TIMESTAMP,
-                metadata = COALESCE(product_offerings.metadata, '{}'::jsonb) || jsonb_build_object(
-                    'previous_price', product_offerings.price,
-                    'previous_currency', product_offerings.currency,
-                    'price_changed_at', CURRENT_TIMESTAMP
-                )
-        """),
-        {
-            "pid": product_id,
-            "sid": supplier_id,
-            "price": item.get("price", 0),
-            "curr": item.get("currency", "USD"),
-            "moq": item.get("moq", 1),
-            "metadata": json.dumps({
-                "original_price": item.get("original_price"),
-                "original_currency": item.get("original_currency"),
-                "converted_to_usd": 'price_usd' in item,
-                "extraction_source": item.get("chunk_source", "direct"),
-                "processed_at": datetime.now().isoformat()
-            })
-        }
-    )
-
-# -------------------------- MAIN ETL PIPELINE --------------------------
-def process_pdf_file(pdf_path: str) -> Tuple[bool, str]:
-    """Process a single PDF file through the enhanced pipeline"""
+# -------------------------- EXTRACTION LOGIC --------------------------
+def extract_data_from_pdf(pdf_path: str) -> Optional[Dict]:
+    """
+    Orchestrates the extraction process.
+    Uses Direct Upload for small PDFs, Text Extraction for large ones.
+    """
     filename = Path(pdf_path).name
-    logger.info(f"Processing PDF: {filename}")
-    
-    session = None
     try:
-        # METHOD 1: Try direct Gemini upload (for smaller files)
+        model = genai.GenerativeModel("gemini-1.5-flash")
         file_size = os.path.getsize(pdf_path)
+        
+        response_text = ""
+
+        # STRATEGY 1: Direct File Upload (Best for layouts/tables)
         if file_size <= MAX_PDF_SIZE_DIRECT_UPLOAD:
-            data = extract_with_gemini_direct(pdf_path)
-        
-        # METHOD 2: Fall back to text extraction + chunking
-        if not data:
-            logger.info(f"Falling back to text extraction for {filename}")
-            text_content = extract_text_from_pdf(pdf_path)
-            if not text_content:
-                return False, "Failed to extract text from PDF"
+            logger.info(f"Uploading {filename} directly to Gemini...")
+            uploaded_file = genai.upload_file(pdf_path)
             
-            data = extract_with_gemini_chunked(text_content, filename)
+            # Wait for processing state
+            while uploaded_file.state.name == "PROCESSING":
+                time.sleep(1)
+                uploaded_file = genai.get_file(uploaded_file.name)
+
+            if uploaded_file.state.name == "FAILED":
+                raise ValueError("Gemini file processing failed.")
+
+            response = model.generate_content([EXTRACTION_PROMPT, uploaded_file])
+            response_text = response.text
+            
+            # Cleanup remote file
+            genai.delete_file(uploaded_file.name)
+
+        # STRATEGY 2: Text Extraction (Fallback for large files)
+        else:
+            logger.info(f"File {filename} too large ({file_size} bytes). Using text extraction fallback.")
+            reader = PdfReader(pdf_path)
+            text_content = ""
+            # Extract text from first 20 pages to avoid context limit
+            for i, page in enumerate(reader.pages[:20]):
+                text_content += f"--- Page {i+1} ---\n{page.extract_text()}\n"
+            
+            prompt_with_data = EXTRACTION_PROMPT + f"\n\nPDF TEXT CONTENT:\n{text_content}"
+            response = model.generate_content(prompt_with_data)
+            response_text = response.text
+
+        # Parse Response
+        cleaned_json = clean_json_string(response_text)
+        return json.loads(cleaned_json)
+
+    except Exception as e:
+        logger.error(f"Extraction failed for {filename}: {e}")
+        logger.error(traceback.format_exc())
+        return None
+
+# -------------------------- DATA MAPPING & CSV EXPORT --------------------------
+def map_to_csv_structure(extracted_data: Dict) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Transforms extracted JSON into:
+    1. Products List (for Odoo Product Import)
+    2. Offerings List (for Odoo Supplier Info Import)
+    """
+    products_rows = []
+    offerings_rows = []
+    
+    supplier_name = extracted_data.get('supplier_name', 'Unknown Supplier')
+    supplier_code = extracted_data.get('supplier_code') or infer_supplier_code(supplier_name)
+    currency = extracted_data.get('currency', 'UGX')
+    
+    for item in extracted_data.get('items', []):
+        # 1. Identity Logic
+        vendor_sku = item.get('vendor_sku')
+        attributes = item.get('attributes', {})
         
-        if not data or not data.get("items"):
-            logger.warning(f"No data extracted from {filename}")
-            return False, "No data extracted"
-        
-        # DATABASE INSERTION
-        session = SessionLocal()
-        
-        # Upsert supplier
-        supplier_id = upsert_supplier(session, data)
-        
-        # Process items
-        items_processed = 0
-        items_skipped = 0
-        new_products = 0
-        
-        for item in data["items"]:
-            try:
-                # Skip items with no price or zero price
-                if not item.get("price") or float(item.get("price", 0)) == 0:
-                    items_skipped += 1
-                    continue
-                
-                # Upsert product
-                product_id, is_new = upsert_product(session, item, supplier_id)
-                if is_new:
-                    new_products += 1
-                
-                # Upsert offering
-                upsert_offering(session, product_id, supplier_id, item)
-                
-                items_processed += 1
-                
-            except Exception as e:
-                logger.error(f"Error processing item {item.get('sku', 'unknown')}: {e}")
-                items_skipped += 1
-                continue
-        
-        # Commit transaction
-        session.commit()
-        
-        logger.info(f"Successfully processed {filename}:")
-        logger.info(f"  - Items processed: {items_processed}")
-        logger.info(f"  - New products: {new_products}")
-        logger.info(f"  - Items skipped: {items_skipped}")
-        
-        # Move to processed directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_filename = f"{Path(pdf_path).stem}_{timestamp}{Path(pdf_path).suffix}"
-        new_path = os.path.join(PROCESSED_PDF_DIR, new_filename)
-        os.rename(pdf_path, new_path)
-        
-        # Log processing summary
-        summary = {
-            "filename": filename,
-            "supplier": data.get("supplier_name"),
-            "items_extracted": len(data.get("items", [])),
-            "items_processed": items_processed,
-            "new_products": new_products,
-            "items_skipped": items_skipped,
-            "processing_time": datetime.now().isoformat(),
-            "method": data.get("extraction_method", "unknown")
+        # If Vendor SKU is missing, generate one
+        if not vendor_sku or vendor_sku.lower() == 'null':
+            internal_sku = generate_smart_sku(supplier_code, item['generic_name'], attributes)
+            vendor_ref = internal_sku # Fallback
+        else:
+            internal_sku = vendor_sku # Ideally, map this to internal if 1:1 match
+            vendor_ref = vendor_sku
+
+        # 2. PRODUCT ROW (The Master Record)
+        # Odoo mapping: Name = Generic Name (Template), SKU = Internal Reference
+        product_row = {
+            'name': item['generic_name'],         # Maps to: Name (Template)
+            'default_code': internal_sku,         # Maps to: Internal Reference
+            'description_sale': item.get('description', ''), # Maps to: Sales Description
+            'categ_id': item.get('category', 'All'),
+            'type': 'product',                    # 'product' = Storable, 'consu' = Consumable
+            'uom_name': item.get('uom', 'Unit'),
+            'list_price': item.get('price', 0),   # This is SALES price. Adjust if markup needed.
+            'standard_price': item.get('price', 0), # Cost price placeholder
+            'tags': supplier_name
         }
         
-        logger.info(f"Processing summary: {json.dumps(summary, indent=2)}")
+        # Add dynamic attributes (e.g., Attribute: Size -> 10Fr)
+        for attr_key, attr_val in attributes.items():
+            if attr_val:
+                col_name = f"Attribute: {attr_key}"
+                product_row[col_name] = attr_val
+            
+        products_rows.append(product_row)
         
-        return True, f"Processed {items_processed} items, {new_products} new products"
-        
-    except Exception as e:
-        if session:
-            session.rollback()
-        
-        logger.error(f"Failed to process {filename}: {e}")
-        logger.error(traceback.format_exc())
-        
-        # Move to failed directory
-        failed_path = os.path.join(FAILED_PDF_DIR, filename)
-        os.rename(pdf_path, failed_path)
-        
-        return False, str(e)
-    
-    finally:
-        if session:
-            session.close()
+        # 3. OFFERING ROW (The Supplier Link)
+        offering_row = {
+            'product_sku': internal_sku,          # Link to Product
+            'supplier_name': supplier_name,       # Link to Vendor
+            'vendor_product_code': vendor_ref,    # Vendor's Code
+            'price': item.get('price', 0),        # Cost Price
+            'currency': currency,
+            'min_qty': item.get('moq', 1),
+            'lead_time_days': item.get('lead_time_days', 1)
+        }
+        offerings_rows.append(offering_row)
 
-def run_etl_pipeline():
-    """Main ETL pipeline runner"""
-    logger.info("=" * 60)
-    logger.info("Starting Enhanced ETL Pipeline")
-    logger.info("=" * 60)
-    
-    # Check for PDFs
-    pdf_files = glob.glob(os.path.join(RAW_PDF_DIR, "*.pdf"))
-    if not pdf_files:
-        logger.info("No PDF files found in raw directory")
+    return products_rows, offerings_rows
+
+def save_to_csv(data_list: List[Dict], output_filename: str):
+    """
+    Saves data to CSV. Appends if file exists, ensuring all headers are present.
+    """
+    if not data_list:
         return
     
-    logger.info(f"Found {len(pdf_files)} PDF(s) to process")
+    file_path = os.path.join(OUTPUT_DIR, output_filename)
+    df_new = pd.DataFrame(data_list)
     
-    # Process each PDF
-    results = {
-        "total_files": len(pdf_files),
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
+    if os.path.exists(file_path):
+        # Load existing to merge headers (in case new attributes appeared)
+        df_existing = pd.read_csv(file_path)
+        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    else:
+        df_combined = df_new
+        
+    # Write back
+    df_combined.to_csv(file_path, index=False)
+    logger.info(f"Updated {output_filename} with {len(data_list)} rows.")
+
+# -------------------------- MAIN PIPELINE --------------------------
+def run_pipeline():
+    logger.info("="*60)
+    logger.info("STARTING PDF INGESTION PIPELINE")
+    logger.info("="*60)
+    
+    pdf_files = glob.glob(os.path.join(RAW_PDF_DIR, "*.pdf"))
+    
+    if not pdf_files:
+        logger.info("No PDF files found in inputs directory.")
+        return
+
+    logger.info(f"Found {len(pdf_files)} PDF(s) to process.")
     
     for pdf_path in pdf_files:
-        success, message = process_pdf_file(pdf_path)
+        filename = Path(pdf_path).name
+        logger.info(f"Processing: {filename}")
         
-        result_detail = {
-            "file": Path(pdf_path).name,
-            "success": success,
-            "message": message,
-            "timestamp": datetime.now().isoformat()
-        }
+        # 1. Extract
+        data = extract_data_from_pdf(pdf_path)
         
-        if success:
-            results["successful"] += 1
-            logger.info(f"✓ {Path(pdf_path).name}: {message}")
-        else:
-            results["failed"] += 1
-            logger.error(f"✗ {Path(pdf_path).name}: {message}")
-        
-        results["details"].append(result_detail)
-        
-        # Brief pause between files
-        time.sleep(1)
-    
-    # Final summary
-    logger.info("=" * 60)
-    logger.info("ETL Pipeline Complete")
-    logger.info("=" * 60)
-    logger.info(f"Total files: {results['total_files']}")
-    logger.info(f"Successful: {results['successful']}")
-    logger.info(f"Failed: {results['failed']}")
-    logger.info(f"Success rate: {(results['successful']/results['total_files']*100):.1f}%")
-    
-    # Save results log
-    results_log = {
-        "run_timestamp": datetime.now().isoformat(),
-        "summary": results
-    }
-    
-    results_file = os.path.join(LOG_FILE.replace(".log", f"_{datetime.now():%Y%m%d_%H%M%S}_results.json"))
-    with open(results_file, 'w') as f:
-        json.dump(results_log, f, indent=2)
-    
-    logger.info(f"Detailed results saved to: {results_file}")
+        if not data or not data.get('items'):
+            logger.warning(f"No valid data extracted from {filename}. Moving to failed.")
+            os.rename(pdf_path, os.path.join(FAILED_PDF_DIR, filename))
+            continue
+            
+        # 2. Map
+        try:
+            prod_rows, offer_rows = map_to_csv_structure(data)
+            
+            # 3. Save
+            if prod_rows:
+                save_to_csv(prod_rows, "extracted_products.csv")
+            if offer_rows:
+                save_to_csv(offer_rows, "extracted_offerings.csv")
+            
+            # 4. Move to Processed
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_name = f"{Path(filename).stem}_{timestamp}.pdf"
+            os.rename(pdf_path, os.path.join(PROCESSED_PDF_DIR, new_name))
+            logger.info(f"Successfully processed {filename}")
+            
+        except Exception as e:
+            logger.error(f"Error mapping/saving data for {filename}: {e}")
+            logger.error(traceback.format_exc())
+            os.rename(pdf_path, os.path.join(FAILED_PDF_DIR, filename))
 
-# -------------------------- ENTRY POINT --------------------------
+    logger.info("Pipeline Complete. Files ready in /data/outputs/")
+
 if __name__ == "__main__":
-    try:
-        # Initial delay for database readiness (useful in Docker)
-        logger.info("Waiting for database to be ready...")
-        time.sleep(5)
-        
-        # Run pipeline
-        run_etl_pipeline()
-        
-    except KeyboardInterrupt:
-        logger.info("ETL pipeline interrupted by user")
-    except Exception as e:
-        logger.error(f"Fatal error in ETL pipeline: {e}")
-        logger.error(traceback.format_exc())
-        raise
+    run_pipeline()
+
