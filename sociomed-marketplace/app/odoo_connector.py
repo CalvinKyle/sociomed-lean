@@ -65,23 +65,30 @@ class OdooConnector:
             
         return results
 
-    def get_variant_id(self, template_id, selected_attributes):
+    def get_variant_id(self, template_id, attribute_value_ids):
         """
         Finds the specific Variant ID based on user selection.
         selected_attributes = {'Size': '10Fr', 'Lumen': 'Double'}
         """
-        # Logic to find the specific product.product ID matching these attributes
-        # This requires searching 'product.product' where 'product_tmpl_id' matches
-        # AND all attribute values match.
-        # (Simplified for brevity - in production, you iterate through variants)
-        domain = [('product_tmpl_id', '=', template_id)]
+        # Search all variants of the template
+        domain = [('product_tmpl_id', '=', int(template_id))]
         variants = self.models.execute_kw(self.db, self.uid, self.password,
             'product.product', 'search_read', [domain], 
             {'fields': ['product_template_attribute_value_ids']})
             
-        # Match logic would go here
-        # Return the specific product_id (e.g., 452)
-        return variants[0]['id'] # Placeholder
+        # Filter for the variant that matches ALL selected attributes
+        # product_template_attribute_value_ids is a list of IDs linking variant to values
+        target_values = set(attribute_value_ids)
+        
+        for v in variants:
+            # Odoo stores these as IDs in 'product_template_attribute_value_ids'
+            # Note: This requires mapping the simple Value ID to the Template Value ID in a full implementation.
+            # For simplicity in this optimization, we assume attribute_value_ids are passed correctly.
+            current_values = set(v['product_template_attribute_value_ids'])
+            if target_values.issubset(current_values):
+                return v['id']
+                
+        return None # No matching variant found
         
     def search_products(self, query, limit=5):
         """
@@ -152,8 +159,7 @@ class OdooConnector:
 
     def create_quotation(self, customer_phone, line_items):
         """
-        Creates a formal Quote in Odoo for the customer. If item is a 'Kit' (Bundle), Odoo automatically expands it on the Delivery Slip,
-        but keeps it as one line on the Quote (Sales Order).
+        Creates a Quote and ensures Lead Tracking (res.partner creation). 
         """
         # 1. Find or Create Customer by Phone
         partner_ids = self.models.execute_kw(self.db, self.uid, self.password,
@@ -166,6 +172,7 @@ class OdooConnector:
                 'res.partner', 'create', [{
                     'name': f"WhatsApp Customer {customer_phone}", 
                     'phone': customer_phone
+                    'comment': 'Lead generated via SocioMed WhatsApp Sales Agent'
                 }])
 
         # 2. Prepare Order Lines
@@ -181,7 +188,7 @@ class OdooConnector:
             'sale.order', 'create', [{
                 'partner_id': partner_id,
                 'order_line': order_lines,
-                'origin': 'WhatsApp Bot',
+                'origin': 'WhatsApp Sales Agent',
                 'client_order_ref': f"WA-{customer_phone[-4:]}"
             }])
             
