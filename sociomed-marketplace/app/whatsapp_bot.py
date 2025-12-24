@@ -644,7 +644,7 @@ def webhook():
         return jsonify({"status": "processed"}), 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "error"}), 200
 
 # --- ADMIN REPORTING ENDPOINT (NEW) ---
 @app.route("/admin/demand-report", methods=["GET"])
