@@ -1,10 +1,10 @@
-version: '3.5'
+version: '3.8'
 
 services:
   # 1. THE BRAIN (Odoo ERP)
   web:
     image: odoo:16.0
-    depends_on:
+    depends_on
         db:
     ports:
         "8069:8069" # This makes Odoo accessible at your-domain.com:8069
@@ -26,16 +26,45 @@ services:
     volumes:
         odoo-db-data:/var/lib/postgresql/data
 
-  # 3. THE MOUTH (Your WhatsApp Bot)
+  # 3. THE CACHE & BROKER (Redis) - NEW
+  redis:
+    image: redis:7-alpine
+    container_name: sociomed-redis
+    ports:
+        "6379:6379"
+      
+  # 4. THE MOUTH (Your WhatsApp Bot)
   whatsapp-bot:
-    build: ./app
+    build:
+      context: .
+      dockerfile: sociomed-marketplace/Dockerfile
     restart: always
     environment:
         ODOO_URL: http://web:8069  # Bot talks to Odoo internally
-        ODOO_DB: db
-        ODOO_USER: odd
+        ODOO_DB: ${ODOO_DB}
+        ODOO_USER: ${ODOO_USER}
         ODOO_PASSWORD: ${ODOO_PASSWORD} 
+        CELERY_BROKER_URL: redis://sociomed-redis:6379/0
+        CELERY_RESULT_BACKEND: redis://sociomed-redis:6379/
     depends_on:
+        web
+        redis
+
+  # 5. THE WORKER (Async Tasks) - NEW
+  celery_worker:
+    build: 
+      context: .
+      dockerfile: sociomed-marketplace/Dockerfile
+    command: celery -A app.whatsapp_bot.celery_app worker --loglevel=info
+    environment:
+        ODOO_URL: http://web:8069
+        ODOO_DB: ${ODOO_DB}
+        ODOO_USER: ${ODOO_USER}
+        ODOO_PASSWORD: ${ODOO_PASSWORD}
+        CELERY_BROKER_URL: redis://sociomed-redis:6379/0
+        CELERY_RESULT_BACKEND: redis://sociomed-redis:6379/0
+    depends_on:
+        redis
         web
 
 volumes:
