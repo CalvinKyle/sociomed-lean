@@ -280,52 +280,13 @@ def create_product_list_payload(products: List[Dict]) -> Dict:
     }
     
 # --- AI & HANDLERS ---
-def handle_simple_search(user_query, user_phone=None):
-    # 1. Call Odoo instead of SQL
-    products = odoo.search_products(user_query)
-    
-    if not products:
-        return "❌ We couldn't find any items matching that description.", False
-
-    # 2. Pass results to your existing list formatter
-    # (The list formatter already works with the dict structure we returned above)
-    return create_product_list_payload(products), True
-
 def handle_search(query):
     products = odoo.search_products(query)
     
     if not products:
-        return "❌ No items found. Try a broader term."
+        return "❌ We couldn't find any items matching that description. Try a different term."
         
-    # Format the Interactive List
-    sections = []
-    
-    # Section 1: Top Matches
-    rows = []
-    for p in products[:8]:
-        desc = f"{p['price']:,.0f} UGX | {p['availability']}"
-        rows.append({
-            "id": f"ADD_{p['id']}",
-            "title": p['name'][:24],
-            "description": desc
-        })
-        
-    sections.append({"title": "Results", "rows": rows})
-    
-    # Section 2: Quick Actions
-    sections.append({
-        "title": "Actions", 
-        "rows": [{"id": "CMD_CART", "title": "View Cart", "description": "Checkout now"}]
-    })
-    
-    return {
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "body": {"text": "Select an item to add to your quote:"},
-            "action": {"button": "View Items", "sections": sections}
-        }
-    }
+    return create_product_list_payload(products)
 
 def handle_config_selection(user_id, template_id, selection_step):
     # Logic to ask for "Size" then "Lumen" using Interactive Buttons
