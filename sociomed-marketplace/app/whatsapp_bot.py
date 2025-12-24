@@ -1,19 +1,11 @@
 import os
 import json
 import requests
-import csv
 import redis
-import io
-from flask import Flask, request, jsonify, Response
-from app.odoo_connector import OdooConnector
-import time
-import google.generativeai as genai
-from typing import Dict, List, Tuple, Optional, Any
 import logging
-from datetime import datetime, timedelta
-from collections import defaultdict
-import uuid
-from functools import wraps
+from flask import Flask, request, jsonify, 
+from app.odoo_connector import OdooConnector
+from typing import Dict, List, Tuple, Optional, Any
 from celery import Celery
 from app.recommendation_engine import get_recommendations
 
@@ -41,32 +33,15 @@ try:
 except:
     print("⚠️ Odoo not configured. Bot will fail.") 
 
-# Database
+# Redis Connection
 try:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
-    logger.info("Database engine initialized successfully")
-except Exception as e:
-    logger.error(f"Error initializing DB engine: {e}")
-    engine = None
-
-# Gemini AI
-gemini_model = None
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-        logger.info("Gemini AI initialized successfully")
-    except Exception as e:
-        logger.error(f"Error initializing Gemini AI: {e}")
-
-# --- REDIS CONNECTION (FOR PERSISTENT CARTS) ---
-try:
+    # Matches service name in docker-compose
     redis_client = redis.Redis(host='sociomed-redis', port=6379, db=0, decode_responses=True)
-    redis_client.ping()  # Test connection
-    logger.info("Redis connected successfully for persistent carts")
+    redis_client.ping()
+    logger.info("Redis connected successfully")
 except Exception as e:
     logger.error(f"Redis connection failed: {e}")
-    redis_client = None  # Fallback gracefully
+    redis_client = None
 
 # Celery setup
 celery_app = Celery(
@@ -138,6 +113,37 @@ class RedisCartManager:
 
 # Use the new persistent cart
 cart_manager = RedisCartManager()
+
+# --- ASYNC TASKS (Celery) ---
+@celery_app.task
+def generate_quote_task(recipient_id, cart_items):
+    """Background task to generate PDF quote to prevent timeouts"""
+    local_odoo = OdooConnector() # Re-init for thread safety in worker
+    try:
+        # 1. Create Quote in Odoo (Creates Lead/Partner automatically)
+        order_ref = local_odoo.create_quotation(recipient_id, cart_items)
+        
+        # 2. Notify User
+        msg = (f"✅ *Quote Generated: {order_ref}*\n"
+               f"Our sales team has received your request. "
+               f"You will receive the official PDF shortly.")
+        
+        # 3. Send Message (Helper function logic inline for brevity)
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_id,
+            "type": "text",
+            "text": {"body": msg}
+        }
+        requests.post(url, headers=headers, json=payload)
+        
+    except Exception as e:
+        logger.error(f"Quote generation failed: {e}")
 
 # --- DATABASE SEARCH & DEMAND LOGGING ---
 def search_master_database(query: str, limit: int = 5, user_phone: str = None):
@@ -354,7 +360,7 @@ def handle_search(query):
     
     # Section 1: Top Matches
     rows = []
-    for p in products[:5]:
+    for p in products[:8]:
         desc = f"{p['price']:,.0f} UGX | {p['availability']}"
         rows.append({
             "id": f"ADD_{p['id']}",
@@ -426,6 +432,23 @@ def handle_add_to_cart_logic(user_id, product_id):
         response_text += "\n\nReply with Item Name to add these."
         
     return response_text
+
+def handle_add_to_cart(user_id, product_id):
+    try:
+        product = cart_manager.add_item(user_id, int(product_id), 1)
+        
+        # Agile Sourcing Logic
+        response_text = f"✅ Added *{product['name']}* to cart."
+        
+        if "Out of Stock" in product.get('availability', ''):
+            response_text += "\n⚠️ *Note:* This item is currently out of stock but available via our partners (Dropship). Lead time: 3-5 days."
+        elif "In Stock" in product.get('availability', ''):
+             response_text += "\n🚚 Ships immediately."
+
+        return response_text
+    except Exception as e:
+        logger.error(f"Add cart error: {e}")
+        return "⚠️ Error adding item."
     
 def handle_quote_command(recipient_id, text):
     # ... [Keep your existing cart retrieval logic] ...
@@ -589,7 +612,7 @@ def webhook():
                             elif user_text == "CMD_RECOMMEND":
                                 # ... keep your existing recommendation logic ...
 
-                            # NEW: Handle "ADD_{product_id}" from interactive list selection
+                            # NEW: Handle
                             elif user_text.startswith("ADD_"):
                                 product_id = user_text.split("_", 1)[1]
                                 try:
