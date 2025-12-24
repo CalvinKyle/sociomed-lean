@@ -288,30 +288,7 @@ def handle_search(query):
         
     return create_product_list_payload(products)
 
-def handle_config_selection(user_id, template_id, selection_step):
-    # Logic to ask for "Size" then "Lumen" using Interactive Buttons
-    # ...
-    return "Please select Size:" # With buttons [10Fr] [12Fr] 
-
 def handle_add_to_cart_logic(user_id, product_id):
-    # 1. Add item to Redis Cart
-    cart_manager.add_item(user_id, int(product_id), 1)
-    
-    # 2. PROACTIVE SALES AGENT: Check for Consumables
-    recs = odoo.get_product_recommendations(int(product_id))
-    
-    response_text = "✅ Added to cart."
-    
-    # If we have consumables (e.g., Reagents for a Machine), suggest them immediately
-    if recs['consumables']:
-        response_text += "\n\n💡 *Frequently bought together:*"
-        for acc in recs['consumables'][:3]:
-            response_text += f"\n- {acc['name']} ({acc['list_price']:,.0f} UGX)"
-        response_text += "\n\nReply with Item Name to add these."
-        
-    return response_text
-
-def handle_add_to_cart(user_id, product_id):
     try:
         product = cart_manager.add_item(user_id, int(product_id), 1)
         
@@ -319,14 +296,21 @@ def handle_add_to_cart(user_id, product_id):
         response_text = f"✅ Added *{product['name']}* to cart."
         
         if "Out of Stock" in product.get('availability', ''):
-            response_text += "\n⚠️ *Note:* This item is currently out of stock but available via our partners (Dropship). Lead time: 3-5 days."
+            response_text += "\n⚠️ *Note:* This item is currently out of stock but available via our partners. Lead time: 1-3 days."
         elif "In Stock" in product.get('availability', ''):
              response_text += "\n🚚 Ships immediately."
 
-        return response_text
+    try:
+        recs = odoo.get_product_recommendations(int(product_id))
+        if recs.get('consumables'):
+            response_text += "\n\n💡 *Frequently bought together:*"
+            for acc in recs['consumables'][:3]:
+                response_text += f"\n- {acc['name']} ({acc['list_price']:,.0f} UGX)"
+            response_text += "\n\nReply with Item Name to add these."
     except Exception as e:
-        logger.error(f"Add cart error: {e}")
-        return "⚠️ Error adding item."
+        logger.error(f"Recommendation fetch failed: {e}")
+        
+    return response_text
     
 def handle_quote_command(recipient_id, text):
     # ... [Keep your existing cart retrieval logic] ...
