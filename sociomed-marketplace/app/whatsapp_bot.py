@@ -574,7 +574,6 @@ def webhook():
 
                         # Now process 'user_text' as if the user typed it manually
                         if user_text:
-                                                    if user_text:
                             # Handle Quick Action Commands first
                             if user_text == "CMD_CART":
                                 user_text = "cart" 
