@@ -6,7 +6,6 @@ requests
 fpdf2
 beautifulsoup4
 pypdf
-google-generativeai
 python-dotenv
 openpyxl
 celery==5.4.0        
