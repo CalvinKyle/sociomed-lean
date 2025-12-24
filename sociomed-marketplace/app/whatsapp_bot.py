@@ -146,64 +146,6 @@ def generate_quote_task(recipient_id, cart_items):
         logger.error(f"Quote generation failed: {e}")
 
 # --- DATABASE SEARCH & DEMAND LOGGING ---
-def search_master_database(query: str, limit: int = 5, user_phone: str = None):
-    if not gemini_model or not engine:
-        return [], False
-
-    try:
-        # Create AI numbers for customer query
-        query_emb = genai.embed_content(
-            model="models/embedding-001",
-            content=query,
-            task_type="retrieval_query"
-        )['embedding']
-
-        with engine.connect() as conn:
-            # UPDATED QUERY: Uses inventory schema & maps new columns
-            sql = text("""
-                SELECT 
-                    p.product_id, p.name, p.manufacturer, p.brand,
-                    p.short_description, p.full_description, p.category, p.sku,
-                    o.price, o.currency, s.name as supplier_name,
-                    o.lead_time_days,
-                    CASE 
-                        WHEN o.quantity_available > 0 THEN 'IN_STOCK' 
-                        ELSE 'ORDER_ON_DEMAND' 
-                    END as availability,
-                    COALESCE(o.quantity_available, 0) as stock_qty
-                FROM inventory.products p
-                JOIN inventory.product_offerings o ON p.product_id = o.product_id
-                LEFT JOIN inventory.suppliers s ON o.supplier_id = s.supplier_id
-                WHERE p.embedding IS NOT NULL
-                ORDER BY p.embedding <-> :query_emb
-                LIMIT :limit
-            """)
-            
-            # Cast embedding to string if using pgvector with sqlalchemy text parameters sometimes requires it, 
-            # but usually passing the list works. If it fails, use str(query_emb)
-            results = conn.execute(sql, {"query_emb": str(query_emb), "limit": limit}).fetchall()
-            
-            # Convert to List[Dict]
-            product_list = []
-            for row in results:
-                product_list.append({
-                    "product_id": row.product_id,
-                    "name": row.name,
-                    "manufacturer": row.manufacturer or row.brand,
-                    "price": float(row.price) if row.price else 0.0,
-                    "currency": row.currency,
-                    "availability": row.availability,
-                    "stock_qty": row.stock_qty,
-                    "lead_time": row.lead_time_days or 7, # Default fallback
-                    "sku": row.sku
-                })
-            
-            return product_list, len(product_list) > 0
-            
-    except Exception as e:
-        logger.error(f"Vector search error: {e}")
-        return [], False
-
 def format_products_for_whatsapp(products: List[Dict], include_pricing: bool = True) -> str:
     """Format product list with clear availability status"""
     if not products:
@@ -384,31 +326,6 @@ def handle_search(query):
             "action": {"button": "View Items", "sections": sections}
         }
     }
-
-def handle_search(query):
-    # 1. Search Templates
-    results = odoo.search_product_templates(query)
-    
-    if not results:
-        return "❌ No items found."
-        
-    sections = []
-    for p in results[:5]:
-        # If product has options (Size, etc.), button triggers configuration
-        if p['attributes']:
-            desc = f"Options: {', '.join(p['attributes'].keys())} | {p['price']:,.0f} UGX"
-            btn_id = f"CONFIG_{p['template_id']}" # Trigger config flow
-        else:
-            desc = f"{p['price']:,.0f} UGX"
-            btn_id = f"ADD_{p['template_id']}" # Direct add
-            
-        sections.append({
-            "title": p['name'][:24], 
-            "description": desc,
-            "id": btn_id
-        })
-        
-    return create_list_message("Found Items", sections)
 
 def handle_config_selection(user_id, template_id, selection_step):
     # Logic to ask for "Size" then "Lumen" using Interactive Buttons
@@ -644,42 +561,6 @@ def webhook():
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return jsonify({"status": "error"}), 200
-
-# --- ADMIN REPORTING ENDPOINT (NEW) ---
-@app.route("/admin/demand-report", methods=["GET"])
-def download_demand_report():
-    """Generates a CSV file tallying requests for items not in stock"""
-    # In production, add a secret token check (e.g., ?token=ADMIN_SECRET)
-    
-    sql = text("""
-        SELECT 
-            search_term, 
-            demand_type, 
-            COUNT(*) as request_count,
-            MAX(created_at) as last_requested
-        FROM unmet_demand
-        GROUP BY search_term, demand_type
-        ORDER BY request_count DESC
-    """)
-    
-    try:
-        with engine.connect() as conn:
-            results = conn.execute(sql).fetchall()
-            
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['Search Term', 'Status', 'Total Requests', 'Last Requested'])
-        
-        for row in results:
-            writer.writerow([row.search_term, row.demand_type, row.request_count, row.last_requested])
-            
-        return Response(
-            output.getvalue(),
-            mimetype="text/csv",
-            headers={"Content-disposition": "attachment; filename=market_demand_tally.csv"}
-        )
-    except Exception as e:
-        return f"Error generating report: {e}", 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
