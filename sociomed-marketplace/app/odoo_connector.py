@@ -171,7 +171,7 @@ class OdooConnector:
             partner_id = self.models.execute_kw(self.db, self.uid, self.password,
                 'res.partner', 'create', [{
                     'name': f"WhatsApp Customer {customer_phone}", 
-                    'phone': customer_phone
+                    'phone': 'customer_phone', 
                     'comment': 'Lead generated via SocioMed WhatsApp Sales Agent'
                 }])
 
