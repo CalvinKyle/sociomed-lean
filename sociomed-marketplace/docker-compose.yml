@@ -30,6 +30,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: sociomed-redis
+    volumes:
+        redis_data: /data
       
   # 4. THE MOUTH (Your WhatsApp Bot)
   whatsapp-bot:
@@ -68,3 +70,4 @@ services:
 volumes:
   odoo-web-data:
   odoo-db-data:
+  redis_data:
