@@ -4,8 +4,8 @@ services:
   # 1. THE BRAIN (Odoo ERP)
   web:
     image: odoo:16.0
-    depends_on
-        db:
+    depends_on:
+      - db
     ports:
         "8069:8069" # This makes Odoo accessible at your-domain.com:8069
     environment:
