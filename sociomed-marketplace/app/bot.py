@@ -1,7 +1,6 @@
 """
 SocioMed WhatsApp Marketplace Bot
 Lean stack: Excel catalog + Flask + Meta Cloud API
-No Odoo, no Redis, no Celery required.
 """
 
 import os
