@@ -1,361 +1,121 @@
 """
-SocioMed WhatsApp Marketplace Bot
-Lean stack: Excel catalog + Flask + Meta Cloud API
-No Odoo, no Redis, no Celery required.
+CatalogEngine — reads the Excel product catalog and provides fast in-memory search.
 """
 
 import os
-import json
 import logging
-import sqlite3
-from datetime import datetime
-from flask import Flask, request, jsonify
-import requests
+import threading
+import time
+from typing import List, Optional
 
-from catalog import CatalogEngine
-from cart import CartManager
-from quote import QuoteGenerator
-from messenger import WhatsAppMessenger
+import pandas as pd
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-
-# -- Boot components --
-catalog = CatalogEngine(os.getenv("CATALOG_PATH", "data/catalog.xlsx"))
-cart_mgr = CartManager(db_path=os.getenv("SQLITE_PATH", "data/sessions.db"))
-messenger = WhatsAppMessenger(
-    token=os.getenv("WHATSAPP_TOKEN"),
-    phone_id=os.getenv("WHATSAPP_PHONE_ID"),
-    api_version=os.getenv("WHATSAPP_API_VERSION", "v19.0"),
-)
-quote_gen = QuoteGenerator(
-    sheets_creds_json=os.getenv("GOOGLE_SHEETS_CREDS"),   # optional
-    quotes_sheet_id=os.getenv("QUOTES_SHEET_ID"),          # optional
-)
-
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "sociomed2025")
+RELOAD_INTERVAL_MINS = int(os.getenv("CATALOG_RELOAD_MINS", "30"))
 
 
-# ── Webhook verification ────────────────────────────────────────────────────
+class CatalogEngine:
+    def __init__(self, path: str):
+        self.path = path
+        self._df = pd.DataFrame()
+        self._lock = threading.RLock()
+        self._load()
+        self._start_reload_thread()
 
-@app.route("/webhook", methods=["GET"])
-def verify():
-    if (request.args.get("hub.mode") == "subscribe"
-            and request.args.get("hub.verify_token") == VERIFY_TOKEN):
-        return request.args.get("hub.challenge"), 200
-    return "Forbidden", 403
+    def search(self, query: str, limit: int = 5) -> List[dict]:
+        with self._lock:
+            if self._df.empty:
+                return []
+            df = self._df[self._df["active"].astype(str).str.upper() == "TRUE"].copy()
+            q = query.lower().strip()
 
+            def score(row) -> int:
+                name = str(row.get("name", "")).lower()
+                if name == q:
+                    return 4
+                if q in name:
+                    return 3
+                search_text = " ".join([
+                    str(row.get("brand", "")),
+                    str(row.get("category", "")),
+                    str(row.get("sub_category", "")),
+                    str(row.get("tags", "")),
+                    str(row.get("description", "")),
+                ]).lower()
+                words = q.split()
+                if all(w in search_text or w in name for w in words):
+                    return 2
+                if any(w in search_text or w in name for w in words):
+                    return 1
+                return 0
 
-# ── Incoming messages ───────────────────────────────────────────────────────
+            df["_score"] = df.apply(score, axis=1)
+            results = (
+                df[df["_score"] > 0]
+                .sort_values("_score", ascending=False)
+                .head(limit)
+            )
+            return [self._row_to_dict(r) for _, r in results.iterrows()]
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.get_json(silent=True) or {}
-    if data.get("object") != "whatsapp_business_account":
-        return jsonify({"status": "ignored"}), 200
+    def get_by_id(self, product_id: str) -> Optional[dict]:
+        with self._lock:
+            if self._df.empty:
+                return None
+            matches = self._df[self._df["product_id"].astype(str) == str(product_id)]
+            if matches.empty:
+                return None
+            return self._row_to_dict(matches.iloc[0])
 
-    for entry in data.get("entry", []):
-        for change in entry.get("changes", []):
-            if change.get("field") != "messages":
-                continue
-            for msg in change.get("value", {}).get("messages", []):
-                _handle_message(msg)
+    def get_related(self, product_id: str, limit: int = 3) -> List[dict]:
+        product = self.get_by_id(product_id)
+        if not product:
+            return []
+        related_ids = [r.strip() for r in str(product.get("related_ids", "")).split(",") if r.strip()]
+        return [p for rid in related_ids[:limit] if (p := self.get_by_id(rid))]
 
-    return jsonify({"status": "ok"}), 200
+    def reload(self):
+        self._load()
 
+    def _load(self):
+        try:
+            df = pd.read_excel(self.path, sheet_name="products", dtype=str)
+            df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+            for col in ("price_ugx", "price_usd", "lead_days", "min_order_qty"):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            with self._lock:
+                self._df = df
+            logger.info(f"Catalog loaded: {len(df)} products from {self.path}")
+        except FileNotFoundError:
+            logger.warning(f"Catalog file not found: {self.path}")
+        except Exception as e:
+            logger.error(f"Catalog load failed: {e}", exc_info=True)
 
-def _handle_message(msg: dict):
-    phone = msg.get("from")
-    msg_type = msg.get("type")
+    def _start_reload_thread(self):
+        def _runner():
+            while True:
+                time.sleep(RELOAD_INTERVAL_MINS * 60)
+                self._load()
+        threading.Thread(target=_runner, daemon=True).start()
 
-    # Resolve text from text or interactive (list/button reply)
-    if msg_type == "text":
-        text = msg["text"]["body"].strip()
-    elif msg_type == "interactive":
-        itype = msg["interactive"].get("type")
-        if itype == "list_reply":
-            text = msg["interactive"]["list_reply"]["id"]
-        elif itype == "button_reply":
-            text = msg["interactive"]["button_reply"]["id"]
-        else:
-            return
-    else:
-        return
-
-    logger.info(f"[{phone}] recv: {text[:80]}")
-
-    try:
-        response = _route(phone, text)
-    except Exception as e:
-        logger.error(f"Route error for {phone}: {e}", exc_info=True)
-        response = "⚠️ Something went wrong. Please try again or type *help*."
-
-    messenger.send(phone, response)
-
-
-# ── Router ──────────────────────────────────────────────────────────────────
-
-def _route(phone: str, text: str):
-    tl = text.lower().strip()
-
-    # System commands (from interactive list IDs or typed)
-    if text.startswith("ADD:"):
-        return _cmd_add(phone, text[4:])
-
-    if tl in ("cart", "cmd_cart", "my cart", "view cart"):
-        return _cmd_view_cart(phone)
-
-    if tl in ("clear", "cmd_clear", "clear cart", "empty cart"):
-        cart_mgr.clear(phone)
-        return "🗑️ Cart cleared."
-
-    if tl in ("quote", "cmd_quote", "request quote", "get quote"):
-        return _cmd_quote(phone)
-
-    if tl in ("catalog", "cmd_catalog", "price list", "download catalog"):
-        return _cmd_catalog()
-
-    if tl in ("support", "cmd_support", "contact", "agent", "human"):
-        return _cmd_support()
-
-    if tl in ("hi", "hello", "start", "help", "menu", "hey"):
-        return _cmd_greeting()
-
-    if text.startswith("REMOVE:"):
-        return _cmd_remove(phone, text[7:])
-
-    # Default: product search
-    return _cmd_search(phone, text)
-
-
-# ── Command handlers ────────────────────────────────────────────────────────
-
-def _cmd_greeting() -> str:
-    return (
-        "👋 *Welcome to SocioMed Marketplace*\n\n"
-        "Your direct source for medical equipment, consumables & health supplies.\n\n"
-        "🔍 *Search* — type any product name (e.g. _IV cannula_, _gloves_, _ECG machine_)\n"
-        "🛒 *Cart* — type *cart* to view your basket\n"
-        "📄 *Quote* — type *quote* to generate a PDF quotation\n"
-        "📞 *Support* — type *support* to reach our team\n\n"
-        "_Start typing a product to search our catalog_ →"
-    )
-
-
-def _cmd_search(phone: str, query: str):
-    results = catalog.search(query, limit=4)
-
-    if not results:
-        # Log demand miss for catalog gap analysis
-        _log_demand_miss(phone, query)
-        return (
-            f"❌ No results for *\"{query}\"*.\n\n"
-            "Our team has been notified to source this item.\n"
-            "Type *support* to speak with an agent directly."
-        )
-
-    return _build_product_list(results, query)
-
-
-def _cmd_add(phone: str, product_id: str):
-    product = catalog.get_by_id(product_id)
-    if not product:
-        return "⚠️ Product not found. Please search again."
-
-    cart_mgr.add(phone, product)
-    cart = cart_mgr.get(phone)
-    total = sum(i["price_ugx"] * i["qty"] for i in cart)
-
-    response = (
-        f"✅ *{product['name']}* added to cart.\n"
-        f"   Unit: {product['unit']}  |  UGX {product['price_ugx']:,.0f}\n\n"
-        f"🛒 Cart: {len(cart)} item(s) — Total UGX {total:,.0f}\n"
-        f"Type *cart* to review or *quote* to generate a quotation."
-    )
-
-    # Cross-sell nudge
-    related = catalog.get_related(product_id, limit=2)
-    if related:
-        response += "\n\n💡 *Often ordered with this:*"
-        for r in related:
-            response += f"\n• {r['name']} — UGX {r['price_ugx']:,.0f}"
-        response += "\nSearch by name to add."
-
-    return response
-
-
-def _cmd_view_cart(phone: str) -> str:
-    cart = cart_mgr.get(phone)
-    if not cart:
-        return "🛒 Your cart is empty.\nSearch for a product to get started."
-
-    lines = ["🛒 *YOUR CART*\n"]
-    total = 0
-    for i, item in enumerate(cart, 1):
-        subtotal = item["price_ugx"] * item["qty"]
-        total += subtotal
-        lines.append(
-            f"{i}. {item['name']}\n"
-            f"   Qty: {item['qty']} × UGX {item['price_ugx']:,.0f} = UGX {subtotal:,.0f}"
-        )
-
-    lines.append(f"\n*Total: UGX {total:,.0f}*")
-    lines.append("\nType *quote* to generate a formal quotation.")
-    return "\n".join(lines)
-
-
-def _cmd_remove(phone: str, index_str: str) -> str:
-    try:
-        idx = int(index_str) - 1
-        removed = cart_mgr.remove(phone, idx)
-        return f"✅ Removed *{removed['name']}* from cart."
-    except (ValueError, IndexError):
-        return "⚠️ Invalid item number. Type *cart* to see your current items."
-
-
-def _cmd_quote(phone: str):
-    cart = cart_mgr.get(phone)
-    if not cart:
-        return "🛒 Your cart is empty. Search and add products first."
-
-    try:
-        quote_ref, pdf_path = quote_gen.generate(phone, cart)
-        cart_mgr.clear(phone)
-
-        if pdf_path:
-            # Send PDF document
-            return {
-                "type": "document",
-                "document": {
-                    "filename": f"SocioMed_{quote_ref}.pdf",
-                    "caption": (
-                        f"📄 *Quotation {quote_ref}*\n\n"
-                        f"Thank you! Our sales team will follow up within 24hrs.\n"
-                        f"📞 +256 777 411 435  |  ✉️ info@socio-med.com"
-                    ),
-                    # In production: upload to WhatsApp media endpoint first
-                    # For now we return the text fallback
-                },
-            }
-
-        return (
-            f"📄 *Quotation {quote_ref} Generated*\n\n"
-            f"Items: {len(cart)}\n"
-            f"Total: UGX {sum(i['price_ugx']*i['qty'] for i in cart):,.0f}\n\n"
-            f"Our team will send the full PDF and contact you within 24 hours.\n"
-            f"📞 +256 777 411 435"
-        )
-    except Exception as e:
-        logger.error(f"Quote error for {phone}: {e}", exc_info=True)
-        return (
-            "⚠️ Could not generate quote right now.\n"
-            "Please type *support* to reach our team directly."
-        )
-
-
-def _cmd_catalog() -> str:
-    catalog_url = os.getenv("CATALOG_PDF_URL", "")
-    if catalog_url:
+    @staticmethod
+    def _row_to_dict(row) -> dict:
         return {
-            "type": "document",
-            "document": {
-                "link": catalog_url,
-                "caption": "📚 SocioMed 2025/26 Product Catalog",
-                "filename": "SocioMed_Catalog.pdf",
-            },
+            "product_id": str(row.get("product_id", "")),
+            "name": str(row.get("name", "")),
+            "brand": str(row.get("brand", "")),
+            "category": str(row.get("category", "")),
+            "sub_category": str(row.get("sub_category", "")),
+            "sku": str(row.get("sku", "")),
+            "unit": str(row.get("unit", "Each")),
+            "currency": str(row.get("currency", "UGX")),
+            "price_ugx": float(row.get("price_ugx", 0)),
+            "price_usd": float(row.get("price_usd", 0)),
+            "stock_status": str(row.get("stock_status", "ON_ORDER")).upper(),
+            "lead_days": int(float(row.get("lead_days", 3))),
+            "min_order_qty": int(float(row.get("min_order_qty", 1))),
+            "tags": str(row.get("tags", "")),
+            "related_ids": str(row.get("related_ids", "")),
+            "description": str(row.get("description", "")),
         }
-    return (
-        "📚 *SocioMed Catalog*\n\n"
-        "Download our full catalog at:\n"
-        "🔗 https://socio-med.com/catalog\n\n"
-        "Or type a product name to search directly."
-    )
-
-
-def _cmd_support() -> str:
-    return (
-        "📞 *Contact SocioMed Team*\n\n"
-        "📱 WhatsApp/Call: +256 777 411 435\n"
-        "✉️  Email: info@socio-med.com\n"
-        "🌐 Web: www.socio-med.com\n\n"
-        "⏰ Mon–Fri  8:00am – 5:00pm EAT\n\n"
-        "A team member will respond within 2 hours during working hours."
-    )
-
-
-# ── WhatsApp interactive list builder ───────────────────────────────────────
-
-def _build_product_list(products: list, query: str) -> dict:
-    """Build a WhatsApp interactive list with product rows + action shortcuts."""
-
-    product_rows = []
-    for p in products:
-        stock_label = {
-            "IN_STOCK": "✅ In stock",
-            "ON_ORDER": f"📦 ~{p.get('lead_days', 3)}d lead",
-            "OUT_OF_STOCK": "❌ Unavailable",
-        }.get(p.get("stock_status", ""), "")
-
-        product_rows.append({
-            "id": f"ADD:{p['product_id']}",
-            "title": p["name"][:24],
-            "description": f"{p.get('brand','')[:14]} | {stock_label} | UGX {p['price_ugx']:,.0f}"[:72],
-        })
-
-    action_rows = [
-        {"id": "cart",        "title": "🛒 View cart",       "description": "See your current basket"},
-        {"id": "quote",       "title": "📄 Request quote",   "description": "Generate PDF quotation"},
-        {"id": "cmd_catalog", "title": "📚 Get catalog",     "description": "Full price list PDF"},
-        {"id": "support",     "title": "📞 Contact us",      "description": "Speak to a team member"},
-    ]
-
-    return {
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "header": {"type": "text", "text": "SocioMed Search Results"},
-            "body": {
-                "text": (
-                    f"Found {len(products)} result(s) for *\"{query}\"*.\n"
-                    "Tap a product to add it to your cart."
-                )
-            },
-            "footer": {"text": "socio-med.com  |  +256 777 411 435"},
-            "action": {
-                "button": "View Results",
-                "sections": [
-                    {"title": "Products", "rows": product_rows},
-                    {"title": "Quick Actions", "rows": action_rows},
-                ],
-            },
-        },
-    }
-
-
-# ── Demand miss logging ──────────────────────────────────────────────────────
-
-def _log_demand_miss(phone: str, query: str):
-    """Log unmatched queries to SQLite for catalog gap analysis."""
-    try:
-        conn = sqlite3.connect(os.getenv("SQLITE_PATH", "data/sessions.db"))
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS demand_misses "
-            "(ts TEXT, phone TEXT, query TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO demand_misses VALUES (?, ?, ?)",
-            (datetime.utcnow().isoformat(), phone, query),
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.warning(f"Demand miss log failed: {e}")
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
