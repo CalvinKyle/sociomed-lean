@@ -5,6 +5,9 @@ pandas==2.2.2
 openpyxl==3.1.4       # Excel read/write
 fpdf2==2.7.9           # PDF quote generation
 python-dotenv==1.0.1
+rapidfuzz
+pypdf2
+
 
 # Optional: Google Sheets quote logging
 # Uncomment if you set GOOGLE_SHEETS_CREDS env var
