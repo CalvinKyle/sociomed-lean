@@ -1,36 +1,22 @@
-# Use Python 3.11 slim image
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies (for psycopg2 if needed)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libpq-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies in one layer
-RUN pip install --no-cache-dir \
-    pandas \
-    sqlalchemy \
-    psycopg2-binary \
-    openpyxl \
-    flask \
-    requests \
-    fpdf2 \
-    beautifulsoup4 \
-    pypdf \
-    gunicorn \
-    google-generativeai \
-    python-dotenv
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy only the application code (data and db handled by volumes)
-COPY app/ /app/
+COPY app/ ./app/
 
-# Expose Flask port
-EXPOSE 5001
+# Create data directory for SQLite + catalog + quotes
+RUN mkdir -p data/quotes
 
-# Run the WhatsApp bot with unbuffered output (better logs)
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "whatsapp_bot:app"]
+EXPOSE 5000
 
+# Gunicorn: 2 sync workers is enough for WebHook workload
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", \
+     "--timeout", "30", "--access-logfile", "-", \
+     "app.bot:app"]
