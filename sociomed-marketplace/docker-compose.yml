@@ -1,73 +1,25 @@
-version: '3.8'
+version: "3.9"
+
+# Lean SocioMed stack: just the bot + a volume for data.
+# No Odoo, no Redis, no Celery, no PostgreSQL.
+# Total memory footprint: ~180MB RAM.
 
 services:
-  # 1. THE BRAIN (Odoo ERP)
-  web:
-    image: odoo:16.0
-    depends_on:
-      - db
+  bot:
+    build: .
+    restart: unless-stopped
     ports:
-        "8069:8069" # This makes Odoo accessible at your-domain.com:8069
-    environment:
-        HOST: db
-        USER: odoo
-        PASSWORD: ${ODOO_PASSWORD}          # Loaded from .env
+      - "5000:5000"
+    env_file:
+      - .env
     volumes:
-        odoo-web-data:/var/lib/odoo
-        ./odoo_custom_addons:/mnt/extra-addons   # Loads your custom modules
-
-  # 2. THE MEMORY (PostgreSQL Database)
-  db:
-    image: postgres:14
-    environment:
-        POSTGRES_DB: ${POSTGRES_DB}              # Loaded from .env
-        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}     # Loaded from .env
-        POSTGRES_USER: ${POSTGRES_USER}
-    volumes:
-        odoo-db-data:/var/lib/postgresql/data
-
-  # 3. THE CACHE & BROKER (Redis) - NEW
-  redis:
-    image: redis:7-alpine
-    container_name: sociomed-redis
-    volumes:
-        redis_data: /data
-      
-  # 4. THE MOUTH (Your WhatsApp Bot)
-  whatsapp-bot:
-    build:
-      context: .
-      dockerfile: sociomed-marketplace/Dockerfile
-    restart: always
-    environment:
-        ODOO_URL: http://web:8069  # Bot talks to Odoo internally
-        ODOO_DB: ${ODOO_DB}
-        ODOO_USER: ${ODOO_USER}
-        ODOO_PASSWORD: ${ODOO_PASSWORD} 
-        CELERY_BROKER_URL: redis://sociomed-redis:6379/0
-        CELERY_RESULT_BACKEND: redis://sociomed-redis:6379/
-    depends_on:
-        web
-        redis
-
-  # 5. THE WORKER (Async Tasks) - NEW
-  celery_worker:
-    build: 
-      context: .
-      dockerfile: sociomed-marketplace/Dockerfile
-    command: celery -A app.whatsapp_bot.celery_app worker --loglevel=info
-    environment:
-        ODOO_URL: http://web:8069
-        ODOO_DB: ${ODOO_DB}
-        ODOO_USER: ${ODOO_USER}
-        ODOO_PASSWORD: ${ODOO_PASSWORD}
-        CELERY_BROKER_URL: redis://sociomed-redis:6379/0
-        CELERY_RESULT_BACKEND: redis://sociomed-redis:6379/0
-    depends_on:
-        redis
-        web
+      # Persist SQLite sessions + quotes between deploys
+      - sociomed_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
-  odoo-web-data:
-  odoo-db-data:
-  redis_data:
+  sociomed_data:
