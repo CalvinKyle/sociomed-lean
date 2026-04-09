@@ -3,7 +3,7 @@ import json
 import requests
 import redis
 import logging
-from flask import Flask, request, jsonify, 
+from flask import Flask, request, jsonify
 from app.odoo_connector import OdooConnector
 from typing import Dict, List, Tuple, Optional, Any
 from celery import Celery
