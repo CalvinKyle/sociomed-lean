@@ -1,15 +1,7 @@
-flask==3.0.3
-gunicorn==22.0.0
-requests==2.32.3
-pandas==2.2.2
-openpyxl==3.1.4       # Excel read/write
-fpdf2==2.7.9           # PDF quote generation
-python-dotenv==1.0.1
+fastapi
+uvicorn
+gspread
+oauth2client
 rapidfuzz
-pypdf2
-
-
-# Optional: Google Sheets quote logging
-# Uncomment if you set GOOGLE_SHEETS_CREDS env var
-# gspread==6.1.2
-# google-auth==2.30.0
+python-dotenv
+requests
