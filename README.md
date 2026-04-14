@@ -1,19 +1,26 @@
-A lightweight, WhatsApp-native procurement system for medical supplies in fragmented, price-sensitive markets.
+# SocioMed Lean – WhatsApp Marketplace
 
-## 🚀 Core Concept
+**WhatsApp-native procurement system for medical supplies** in Uganda and similar markets.
 
-This system enables healthcare providers to:
+Healthcare providers search products, compare brands/prices, and request PFIs directly in WhatsApp.
 
-- Search for medical products via WhatsApp
-- Compare market options (brand + price tiers)
-- Request official quotations (PFIs)
-- Connect directly with suppliers
+## 🚀 Features
+- Instant product search via WhatsApp
+- Smart brand + price tier comparison
+- PFI (quotation) requests with facility details
+- Direct supplier WhatsApp notification
+- Google Sheets as easy admin interface
+- PostgreSQL + Redis for speed and scale
 
 ## 🧱 Architecture
+WhatsApp Cloud API → FastAPI → PostgreSQL (core) + Redis (sessions/cache)  
+Google Sheets → sync script → PostgreSQL (you still edit in Sheets)
 
-WhatsApp → FastAPI Backend → Google Sheets (DB)
+## 📊 Data Model
+(See Google Sheet tabs: products, vendors, inventory, pricing, aliases)
 
-
----
-
-
+## ⚙️ Quick Start (Local)
+```bash
+pip install -r requirements.txt
+python sync_sheets_to_db.py
+uvicorn app.main:app --reload
