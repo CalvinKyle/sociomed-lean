@@ -10,7 +10,10 @@ def find_product(query, products, aliases):
 
     for a in aliases:
         if a["alias"].lower() in query.lower():
-            return next(p for p in products if p["product_id"] == a["product_id"])
+            return next(
+                (p for p in products if p["product_id"] == a["product_id"]),
+                None
+            )
 
     return None
 
@@ -24,19 +27,29 @@ def get_results(product_id, data):
     results = []
 
     for inv in data["inventory"]:
-        if inv["product_id"] == product_id:
+        if inv["product_id"] != product_id:
+            continue
 
-            vendor = next(v for v in data["vendors"] if v["vendor_id"] == inv["vendor_id"])
+        vendor = next(
+            (v for v in data["vendors"] if v["vendor_id"] == inv["vendor_id"]),
+            None
+        )
 
-            pricing_tiers = attach_pricing(inv["inventory_id"], data["pricing"])
+        if not vendor:
+            continue
 
-            results.append({
-                "brand": inv.get("brand", "Generic"),
-                "stock": inv["stock_qty"],
-                "lead_time_days": inv.get("lead_time_days", "N/A"),
-                "pricing": pricing_tiers,
-                "vendor_id": vendor["vendor_id"],
-                "vendor_phone": vendor.get("phone")
-            })
+        pricing_tiers = attach_pricing(inv["inventory_id"], data["pricing"])
+
+        if not pricing_tiers:
+            continue
+
+        results.append({
+            "brand": inv.get("brand", "Generic"),
+            "stock": inv.get("stock_qty", 0),
+            "lead_time_days": inv.get("lead_time_days", "N/A"),
+            "pricing": pricing_tiers,
+            "vendor_id": vendor["vendor_id"],
+            "vendor_phone": vendor.get("phone")
+        })
 
     return results
