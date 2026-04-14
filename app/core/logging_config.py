@@ -36,7 +36,7 @@ LOGGING_CONFIG = {
 }
 
 # Function to set up logging configuration
-def setup_logging(correlation_id):
+def setup_logging(correlation_id: str = "startup"):
     logging.config.dictConfig(LOGGING_CONFIG)
     logger = logging.getLogger(__name__)
     logger.info('Logging setup done', extra={'correlation_id': correlation_id})
