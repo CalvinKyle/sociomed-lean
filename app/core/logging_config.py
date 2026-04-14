@@ -15,10 +15,10 @@ LOGGING_CONFIG = {
     },
     'handlers': {
         'async_file_handler': {
-            'class': 'logging.handlers.AsyncHandler',
-            'formatter': 'json',
-            'level': 'INFO',
-            'filename': 'audit_trail.log',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': 'logs/audit_trail.log',
+            'maxBytes': 10485760,   # 10MB
+            'backupCount': 5,  
         },
         'console': {
             'class': 'logging.StreamHandler',
