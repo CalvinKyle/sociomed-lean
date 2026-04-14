@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: sociomed-marketplace
+    env: docker
+    region: us-east
+    plan: standard
+    
+    healthCheckPath: /health
+    healthCheckInterval: 30
+    
+    autoDeploy: false
+    
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: GOOGLE_CREDS_FILE
+        value: credentials.json
+      - key: SHEET_NAME
+        value: sociomed_db
+      - key: REDIS_HOST
+        fromService:
+          name: sociomed-redis
+          type: redis
+          property: host
+      - key: REDIS_PORT
+        fromService:
+          name: sociomed-redis
+          type: redis
+          property: port
+      - key: CACHE_TTL_SECONDS
+        value: "300"
+      - key: SESSION_TTL
+        value: "1800"
+      - key: DEFAULT_CURRENCY
+        value: UGX
+
+  - type: redis
+    name: sociomed-redis
+    region: us-east
+    plan: free
