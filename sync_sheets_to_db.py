@@ -1,8 +1,8 @@
 import sys
 sys.path.insert(0, ".")   # Makes sure Python can find the 'app' folder
 
-from app.sheets import load_data as load_from_sheets
-from app.db import (
+from app.integrations.sheets import load_data as load_from_sheets
+from app.schemas.db import (
     SessionLocal,
     Product,
     Vendor,
