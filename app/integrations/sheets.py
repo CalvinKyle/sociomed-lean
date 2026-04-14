@@ -1,7 +1,7 @@
 import gspread
 import time
 from oauth2client.service_account import ServiceAccountCredentials
-from app.config import GOOGLE_CREDS_FILE, SHEET_NAME, CACHE_TTL_SECONDS
+from app.core.config import GOOGLE_CREDS_FILE, SHEET_NAME, CACHE_TTL_SECONDS
 
 scope = [
     "https://spreadsheets.google.com/feeds",
