@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-gspread
-oauth2client
-rapidfuzz
-python-dotenv
-requests
