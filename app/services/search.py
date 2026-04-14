@@ -48,22 +48,4 @@ def get_results(product_id: str, data: Dict) -> List[Dict]:
             "vendor_phone": vendor.get("phone")
         })
     
-    return results
-        if not vendor:
-            continue
-
-        pricing_tiers = attach_pricing(inv["inventory_id"], data["pricing"])
-
-        if not pricing_tiers:
-            continue
-
-        results.append({
-            "brand": inv.get("brand", "Generic"),
-            "stock": inv.get("stock_qty", 0),
-            "lead_time_days": inv.get("lead_time_days", "N/A"),
-            "pricing": pricing_tiers,
-            "vendor_id": vendor["vendor_id"],
-            "vendor_phone": vendor.get("phone")
-        })
-
-    return results
+        return results
