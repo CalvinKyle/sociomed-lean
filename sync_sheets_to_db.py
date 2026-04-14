@@ -1,65 +1,99 @@
-import requests
-import time
-import json
-import logging
-from typing import Optional, Dict, Any
-from tenacity import retry, stop_after_attempt, wait_exponential
-import redis
-from app.config import REDIS_HOST, REDIS_PORT, SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID
+import sys
+sys.path.insert(0, ".")   # Makes sure Python can find the 'app' folder
 
-logger = logging.getLogger(__name__)
+from app.sheets import load_data as load_from_sheets
+from app.db import (
+    SessionLocal,
+    Product,
+    Vendor,
+    Inventory,
+    Pricing,
+    Alias,
+    init_db
+)
 
-# Redis client for sessions + caching
-redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+def sync_sheets_to_db():
+    print("🔄 Starting FULL sync from Google Sheets → PostgreSQL...")
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
-def send_whatsapp_message(to: str, message: str) -> bool:
-    # (same code as before — unchanged)
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
+    # 1. Make sure database tables exist
+    init_db()
+    
+    # 2. Pull the latest data from your Google Sheets
+    data = load_from_sheets()
+    print(f"📊 Loaded from Sheets: {len(data['products'])} products, "
+          f"{len(data['vendors'])} vendors, {len(data['inventory'])} inventory items")
+
+    # 3. Connect to PostgreSQL
+    db = SessionLocal()
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        if res.status_code == 200:
-            logger.info(f"Message sent to {to}")
-            return True
-        else:
-            logger.error(f"WhatsApp API error {res.status_code}: {res.text}")
-            return False
+        # Clear old data (safe for MVP — we replace everything each sync)
+        print("🧹 Clearing old data...")
+        db.query(Product).delete()
+        db.query(Vendor).delete()
+        db.query(Inventory).delete()
+        db.query(Pricing).delete()
+        db.query(Alias).delete()
+        db.commit()
+
+        # ── PRODUCTS ──
+        print("📦 Inserting Products...")
+        for p in data["products"]:
+            db.add(Product(
+                product_id=str(p.get("product_id", "")),
+                name=str(p.get("name", "")),
+                category=str(p.get("category", ""))
+            ))
+
+        # ── VENDORS ──
+        print("👥 Inserting Vendors...")
+        for v in data["vendors"]:
+            db.add(Vendor(
+                vendor_id=str(v.get("vendor_id", "")),
+                name=str(v.get("name", "")),
+                phone=str(v.get("phone", ""))
+            ))
+
+        # ── INVENTORY ──
+        print("📦 Inserting Inventory...")
+        for i in data["inventory"]:
+            db.add(Inventory(
+                inventory_id=str(i.get("inventory_id", "")),
+                product_id=str(i.get("product_id", "")),
+                vendor_id=str(i.get("vendor_id", "")),
+                brand=str(i.get("brand", "")),
+                stock_qty=int(i.get("stock_qty", 0) or 0),
+                lead_time_days=int(i.get("lead_time_days", 0) or 0)
+            ))
+
+        # ── PRICING ──
+        print("💰 Inserting Pricing...")
+        for pr in data["pricing"]:
+            db.add(Pricing(
+                pricing_id=str(pr.get("pricing_id", "")),
+                inventory_id=str(pr.get("inventory_id", "")),
+                min_qty=int(pr.get("min_qty", 0) or 0),
+                max_qty=int(pr.get("max_qty", 0) or 0) if pr.get("max_qty") else None,
+                unit_price=int(pr.get("unit_price", 0) or 0)
+            ))
+
+        # ── ALIASES ──
+        print("🔍 Inserting Aliases...")
+        for a in data["aliases"]:
+            db.add(Alias(
+                alias=str(a.get("alias", "")),
+                product_id=str(a.get("product_id", ""))
+            ))
+
+        # 4. Save everything
+        db.commit()
+        print("✅ SYNC SUCCESSFUL! PostgreSQL is now 100% up to date with your Sheets.")
+
     except Exception as e:
-        logger.error(f"Error sending to {to}: {e}")
+        db.rollback()
+        print(f"❌ Sync failed: {e}")
         raise
+    finally:
+        db.close()
 
-# ── REDIS-BACKED SESSIONS (replaces old in-memory dict) ──
-def save_session(user: str, data: Dict[str, Any]) -> None:
-    key = f"session:{user}"
-    redis_client.setex(key, SESSION_TTL, json.dumps(data))
-    logger.info(f"Session saved for {user} (Redis)")
-
-def get_session(user: str) -> Optional[Dict[str, Any]]:
-    key = f"session:{user}"
-    data = redis_client.get(key)
-    if data:
-        return json.loads(data)
-    return None
-
-def update_session(user: str, key: str, value: Any) -> None:
-    session = get_session(user) or {}
-    session[key] = value
-    save_session(user, session)
-    logger.debug(f"Session updated for {user}: {key}={value}")
-
-def notify_vendor(vendor_phone: str, message: str) -> bool:
-    # (same as before)
-    if not vendor_phone:
-        logger.warning("Vendor phone missing")
-        return False
-    success = send_whatsapp_message(vendor_phone, message)
-    if not success:
-        logger.error(f"Failed to notify vendor {vendor_phone}")
-    return success
-
-def log_audit_event(user_phone: str, event_type: str, data: Dict[str, Any]) -> None:
-    # (same as before)
-    audit_log = {"user_phone": user_phone, "event_type": event_type, "data": data, "timestamp": time.time()}
-    logger.info(f"AUDIT: {json.dumps(audit_log)}")
+if __name__ == "__main__":
+    sync_sheets_to_db()
