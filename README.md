@@ -1,46 +1,26 @@
-Provide an updated readme file by improving and adding to this where applicable: [# SocioMed WhatsApp Marketplace
+# SocioMed Lean – WhatsApp Marketplace
 
-A lightweight, WhatsApp-native procurement system for medical supplies in fragmented, price-sensitive markets.
+**WhatsApp-native procurement system for medical supplies** in Uganda and similar markets.
 
-## 🚀 Core Concept
+Healthcare providers search products, compare brands/prices, and request PFIs directly in WhatsApp.
 
-This system enables healthcare providers to:
-
-- Search for medical products via WhatsApp
-- Compare market options (brand + price tiers)
-- Request official quotations (PFIs)
-- Connect directly with suppliers
+## 🚀 Features
+- Instant product search via WhatsApp
+- Smart brand + price tier comparison
+- PFI (quotation) requests with facility details
+- Direct supplier WhatsApp notification
+- Google Sheets as easy admin interface
+- PostgreSQL + Redis for speed and scale
 
 ## 🧱 Architecture
+WhatsApp Cloud API → FastAPI → PostgreSQL (core) + Redis (sessions/cache)  
+Google Sheets → sync script → PostgreSQL (you still edit in Sheets)
 
-WhatsApp → FastAPI Backend → Google Sheets (DB)
+## 📊 Data Model
+(See Google Sheet tabs: products, vendors, inventory, pricing, aliases)
 
-## 📊 Data Model (Google Sheets)
-
-### المنتجات (Sheets)
-
-#### products
-| product_id | name | category |
-
-#### vendors
-| vendor_id | name | phone |
-
-#### inventory
-| inventory_id | product_id | vendor_id | brand | stock_qty | lead_time_days |
-
-#### pricing
-| pricing_id | inventory_id | min_qty | max_qty | unit_price |
-
-#### aliases
-| alias | product_id |
-
----
-
-## ⚙️ Setup
-
-### 1. Clone Repo
-
+## ⚙️ Quick Start (Local)
 ```bash
-git clone https://github.com/your-repo/sociomed-whatsapp-marketplace.git
-cd sociomed-whatsapp-marketplace
-]
+pip install -r requirements.txt
+python sync_sheets_to_db.py
+uvicorn app.main:app --reload
