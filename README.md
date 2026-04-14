@@ -24,3 +24,11 @@ Google Sheets → sync script → PostgreSQL (you still edit in Sheets)
 pip install -r requirements.txt
 python sync_sheets_to_db.py
 uvicorn app.main:app --reload
+
+## 🗃 Database Migrations (Alembic)
+
+When you change models in `app/models/`:
+
+```bash
+alembic revision --autogenerate -m "Add new feature"
+alembic upgrade head
