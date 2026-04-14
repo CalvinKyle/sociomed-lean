@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request
+from app.services.tasks import process_whatsapp_message
 from app.services.whatsapp_service import (
     extract_message,
     handle_incoming_message
