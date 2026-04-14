@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: sociomed-marketplace
+    name: sociomed-lean
     env: docker
     region: us-east
     plan: standard
@@ -48,6 +48,13 @@ services:
         value: "1800"
       - key: DEFAULT_CURRENCY
         value: UGX
+
+  - type: worker
+    name: sociomed-lean-celery-worker
+    env: python
+    region: us-east
+    plan: starter   # or free for testing
+    command: celery -A app.core.celery_app worker --loglevel=info
 
   - type: redis
     name: sociomed-redis
