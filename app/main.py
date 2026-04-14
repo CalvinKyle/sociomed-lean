@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI
 app = FastAPI(title="SocioMed Marketplace", version="2.0.0")
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
 
 # Rate limiting
 limiter = Limiter(key_func=get_remote_address)
