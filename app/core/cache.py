@@ -19,6 +19,21 @@ redis_client = redis.Redis(
 )
 
 CACHE_KEY = "sociomed:full_data"   # All products, inventory, pricing, etc.
+def build_indexes(data: dict) -> dict:
+    """Pre-build lookup indexes to avoid O(n) loops on every search."""
+    data["inventory_by_product"] = {}
+    for inv in data.get("inventory", []):
+        pid = inv["product_id"]
+        data["inventory_by_product"].setdefault(pid, []).append(inv)
+
+    data["vendors_by_id"] = {v["vendor_id"]: v for v in data.get("vendors", [])}
+
+    data["pricing_by_inventory"] = {}
+    for pr in data.get("pricing", []):
+        iid = pr["inventory_id"]
+        data["pricing_by_inventory"].setdefault(iid, []).append(pr)
+
+    return data
 
 def get_cached_data() -> Dict[str, Any]:
     """
@@ -36,7 +51,7 @@ def get_cached_data() -> Dict[str, Any]:
 
     # 2. Fallback: Load fresh data from PostgreSQL
     logger.info("📥 Loading data from PostgreSQL (cache miss)")
-    data = load_data()
+    data = build_indexes(load_data())
 
     # 3. Cache the result for future requests
     try:
@@ -50,24 +65,6 @@ def get_cached_data() -> Dict[str, Any]:
         logger.warning(f"Failed to cache data in Redis: {e}")
 
     return data
-
-def build_indexes(data: dict) -> dict:
-    """Pre-build lookup indexes to avoid O(n) loops on every search."""
-    data["inventory_by_product"] = {}
-    for inv in data.get("inventory", []):
-        pid = inv["product_id"]
-        data["inventory_by_product"].setdefault(pid, []).append(inv)
-
-    data["vendors_by_id"] = {v["vendor_id"]: v for v in data.get("vendors", [])}
-
-    data["pricing_by_inventory"] = {}
-    for pr in data.get("pricing", []):
-        iid = pr["inventory_id"]
-        data["pricing_by_inventory"].setdefault(iid, []).append(pr)
-
-    return data
-
-
 
 # Optional helper if you ever need to clear the cache manually
 def clear_cache() -> bool:
