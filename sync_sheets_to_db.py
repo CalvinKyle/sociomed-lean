@@ -12,6 +12,10 @@ from app.db import (
     init_db
 )
 
+# Ensure schema is up-to-date before syncing data
+import subprocess
+subprocess.run(["alembic", "upgrade", "head"], check=True)
+
 def sync_sheets_to_db():
     print("🔄 Starting FULL sync from Google Sheets → PostgreSQL...")
 
