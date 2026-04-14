@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
-from app.config import REDIS_HOST, REDIS_PORT, SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID
+from app.core.config import REDIS_HOST, REDIS_PORT, SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID
 
 logger = logging.getLogger(__name__)
 
