@@ -1,8 +1,8 @@
 import sys
 sys.path.insert(0, ".")   # Makes sure Python can find the 'app' folder
 
-from app.sheets import load_data as load_from_sheets
-from app.db import (
+from app.integrations.sheets import load_data as load_from_sheets
+from app.schemas.db import (
     SessionLocal,
     Product,
     Vendor,
@@ -11,6 +11,10 @@ from app.db import (
     Alias,
     init_db
 )
+
+# Ensure schema is up-to-date before syncing data
+import subprocess
+subprocess.run(["alembic", "upgrade", "head"], check=True)
 
 def sync_sheets_to_db():
     print("🔄 Starting FULL sync from Google Sheets → PostgreSQL...")

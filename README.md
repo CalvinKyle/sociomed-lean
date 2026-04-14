@@ -24,3 +24,15 @@ Google Sheets → sync script → PostgreSQL (you still edit in Sheets)
 pip install -r requirements.txt
 python sync_sheets_to_db.py
 uvicorn app.main:app --reload
+
+## 🗃 Database Migrations (Alembic)
+When you change models in `app/models/`:
+```bash
+alembic revision --autogenerate -m "Add new feature"
+alembic upgrade head
+
+## 🧵 Async Processing (Celery)
+Webhook messages are offloaded to Celery tasks for scalability.
+- Run locally: `celery -A app.core.celery_app worker --loglevel=info`
+- Monitor: http://localhost:5555 (Flower dashboard)
+
