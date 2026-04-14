@@ -49,6 +49,19 @@ def update_session(user: str, key: str, value: Any) -> None:
     save_session(user, session)
     logger.debug(f"Session updated for {user}: {key}={value}")
 
+def delete_session(user: str) -> None:
+    key = f"session:{user}"
+    redis_client.delete(key)
+    logger.info(f"Session deleted for {user}")
+
+# ── SESSION LOCKS (prevents race conditions on duplicate webhooks) ──
+def acquire_session_lock(user: str, timeout: int = 10) -> bool:
+    lock_key = f"session_lock:{user}"
+    return bool(redis_client.set(lock_key, "1", ex=timeout, nx=True))
+
+def release_session_lock(user: str) -> None:
+    redis_client.delete(f"session_lock:{user}")
+
 async def notify_vendor(vendor_phone: str, message: str) -> bool:
     # (same as before)
     if not vendor_phone:
