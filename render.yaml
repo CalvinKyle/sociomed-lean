@@ -27,6 +27,11 @@ services:
         value: credentials.json
       - key: SHEET_NAME
         value: sociomed_db
+      - key: DATABASE_URL
+        fromService:
+          name: sociomed-postgres
+          type: pgsql
+          property: connectionString
       - key: REDIS_HOST
         fromService:
           name: sociomed-redis
@@ -48,3 +53,8 @@ services:
     name: sociomed-redis
     region: us-east
     plan: free
+
+  - type: pgsql
+    name: sociomed-postgres
+    region: us-east
+    plan: free   # change to starter when you go live
