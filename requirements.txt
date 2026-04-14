@@ -1,0 +1,8 @@
+redis
+prometheus-client
+pydantic
+slowapi
+google-auth
+google-auth-oauthlib
+tenacity
+pytest
