@@ -1,55 +1,139 @@
-from rapidfuzz import process
+from fastapi import FastAPI, Request
+from app.config import VERIFY_TOKEN, validate_config
+from app.sheets import load_data
+from app.search import find_product, get_results
+from app.formatter import format_results
+from app.utils import (
+    send_whatsapp_message,
+    save_session,
+    get_session,
+    update_session,
+    notify_vendor
+)
+
+app = FastAPI()
+
+# Validate config at startup
+validate_config()
 
 
-def find_product(query, products, aliases):
-    names = [p["name"] for p in products]
-
-    match = process.extractOne(query, names)
-    if match and match[1] > 70:
-        return products[match[2]]
-
-    for a in aliases:
-        if a["alias"].lower() in query.lower():
-            return next(
-                (p for p in products if p["product_id"] == a["product_id"]),
-                None
-            )
-
-    return None
+# -----------------------------
+# Webhook Verification
+# -----------------------------
+@app.get("/webhook")
+def verify(mode: str = None, token: str = None, challenge: str = None):
+    if token == VERIFY_TOKEN:
+        return int(challenge)
+    return "Verification failed"
 
 
-def attach_pricing(inventory_id, pricing_table):
-    tiers = [p for p in pricing_table if p["inventory_id"] == inventory_id]
-    return sorted(tiers, key=lambda x: x["min_qty"])
+# -----------------------------
+# Safe message extraction
+# -----------------------------
+def extract_message(body):
+    try:
+        return body["entry"][0]["changes"][0]["value"]["messages"][0]
+    except:
+        return None
 
 
-def get_results(product_id, data):
-    results = []
+# -----------------------------
+# Main Webhook
+# -----------------------------
+@app.post("/webhook")
+async def webhook(req: Request):
+    body = await req.json()
 
-    for inv in data["inventory"]:
-        if inv["product_id"] != product_id:
-            continue
+    message = extract_message(body)
+    if not message:
+        return {"status": "ignored"}
 
-        vendor = next(
-            (v for v in data["vendors"] if v["vendor_id"] == inv["vendor_id"]),
-            None
+    text = message["text"]["body"]
+    sender = message["from"]
+
+    text_clean = text.strip().lower()
+    session = get_session(sender)
+
+    # -----------------------------
+    # PFI FLOW
+    # -----------------------------
+    if session and text_clean == "1":
+        update_session(sender, "stage", "pfi_name")
+        send_whatsapp_message(sender, "Enter facility name:")
+        return {"status": "ok"}
+
+    if session and session.get("stage") == "pfi_name":
+        update_session(sender, "facility_name", text)
+        update_session(sender, "stage", "pfi_location")
+        send_whatsapp_message(sender, "Enter delivery location:")
+        return {"status": "ok"}
+
+    if session and session.get("stage") == "pfi_location":
+        update_session(sender, "location", text)
+        update_session(sender, "stage", "pfi_quantity")
+        send_whatsapp_message(sender, "Enter required quantity:")
+        return {"status": "ok"}
+
+    if session and session.get("stage") == "pfi_quantity":
+        update_session(sender, "quantity", text)
+
+        summary = (
+            "*PFI REQUEST*\n\n"
+            f"Product: {session['product']['name']}\n"
+            f"Quantity: {session['quantity']}\n"
+            f"Facility: {session['facility_name']}\n"
+            f"Location: {session['location']}\n"
         )
 
-        if not vendor:
-            continue
+        send_whatsapp_message(sender, summary + "\nSubmitted to supplier.")
 
-        pricing_tiers = attach_pricing(inv["inventory_id"], data["pricing"])
+        # Send to first vendor (MVP)
+        first_option = session["options"][0]
+        first_vendor = first_option["items"][0]
 
-        if not pricing_tiers:
-            continue
+        notify_vendor(first_vendor["vendor_phone"], summary)
 
-        results.append({
-            "brand": inv.get("brand", "Generic"),
-            "stock": inv.get("stock_qty", 0),
-            "lead_time_days": inv.get("lead_time_days", "N/A"),
-            "pricing": pricing_tiers,
-            "vendor_id": vendor["vendor_id"],
-            "vendor_phone": vendor.get("phone")
-        })
+        return {"status": "ok"}
 
-    return results
+    # -----------------------------
+    # RECOMMENDATION
+    # -----------------------------
+    if session and text_clean == "2":
+        best_option = min(
+            session["options"],
+            key=lambda o: min(
+                tier["unit_price"]
+                for item in o["items"]
+                for tier in item["pricing"]
+            )
+        )
+
+        send_whatsapp_message(
+            sender,
+            f"Best option: {best_option['brand']} (Option {best_option['option']})"
+        )
+        return {"status": "ok"}
+
+    # -----------------------------
+    # NEW SEARCH
+    # -----------------------------
+    data = load_data()
+
+    product = find_product(text, data["products"], data["aliases"])
+
+    if not product:
+        send_whatsapp_message(sender, "Product not found. Try another name.")
+        return {"status": "ok"}
+
+    results = get_results(product["product_id"], data)
+
+    reply, option_map = format_results(product["name"], results)
+
+    save_session(sender, {
+        "product": product,
+        "options": option_map
+    })
+
+    send_whatsapp_message(sender, reply)
+
+    return {"status": "ok"}
