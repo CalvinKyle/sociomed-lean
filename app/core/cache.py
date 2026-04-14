@@ -51,6 +51,23 @@ def get_cached_data() -> Dict[str, Any]:
 
     return data
 
+def build_indexes(data: dict) -> dict:
+    """Pre-build lookup indexes to avoid O(n) loops on every search."""
+    data["inventory_by_product"] = {}
+    for inv in data.get("inventory", []):
+        pid = inv["product_id"]
+        data["inventory_by_product"].setdefault(pid, []).append(inv)
+
+    data["vendors_by_id"] = {v["vendor_id"]: v for v in data.get("vendors", [])}
+
+    data["pricing_by_inventory"] = {}
+    for pr in data.get("pricing", []):
+        iid = pr["inventory_id"]
+        data["pricing_by_inventory"].setdefault(iid, []).append(pr)
+
+    return data
+
+
 
 # Optional helper if you ever need to clear the cache manually
 def clear_cache() -> bool:
