@@ -24,19 +24,17 @@ async def verify_webhook(mode: str = None, token: str = None, challenge: str = N
 async def whatsapp_webhook(req: Request):
     try:
         body = await req.json()
-        message = await extract_message(body)
+        message = await extract_message(body)   # from whatsapp_service
 
         if not message:
             return {"status": "ignored"}
 
-        # All conversation logic is now cleanly handled in whatsapp_service
-        await handle_incoming_message(message)
-        return {"status": "ok"}
+        # 🔥 OFFLOAD TO CELERY (instant response to WhatsApp)
+        process_whatsapp_message.delay(message)
+
+        return {"status": "ok"}   # Return immediately
 
     except Exception as e:
         from app.core.utils import log_audit_event
         log_audit_event("system", "webhook_error", {"error": str(e)})
         return {"status": "error"}, 500
-    except Exception as e:
-        log_audit_event("system", "webhook_error", {"error": str(e)})
-        return {"status": "error", "message": "Internal server error"}, 500
