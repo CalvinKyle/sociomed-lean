@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
-def send_whatsapp_message(to: str, message: str) -> bool:
+async def send_whatsapp_message(to: str, message: str) -> bool:
     # (same code as before — unchanged)
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -49,7 +49,7 @@ def update_session(user: str, key: str, value: Any) -> None:
     save_session(user, session)
     logger.debug(f"Session updated for {user}: {key}={value}")
 
-def notify_vendor(vendor_phone: str, message: str) -> bool:
+async def notify_vendor(vendor_phone: str, message: str) -> bool:
     # (same as before)
     if not vendor_phone:
         logger.warning("Vendor phone missing")
