@@ -27,3 +27,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Start application
 CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "app.main:app", "--bind", "0.0.0.0:10000"]
+
+# For Celery worker (Render will override CMD)
+CMD ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info"]
