@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import your models and config
 from app.core.config import DATABASE_URL
-from app.models.base import Base  # ← We'll create this next
+from app.schemas.db import Base 
 
 # This is the Alembic Config object
 config = context.config
