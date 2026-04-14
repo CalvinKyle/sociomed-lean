@@ -5,7 +5,7 @@ services:
     region: us-east
     plan: standard
     
-    healthCheckPath: /health
+    healthCheckPath: /api/health
     healthCheckInterval: 30
     
     autoDeploy: false
