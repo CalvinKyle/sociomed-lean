@@ -76,3 +76,14 @@ def log_audit_event(user_phone: str, event_type: str, data: Dict[str, Any]) -> N
     # (same as before)
     audit_log = {"user_phone": user_phone, "event_type": event_type, "data": data, "timestamp": time.time()}
     logger.info(f"AUDIT: {json.dumps(audit_log)}")
+
+def set_state(user: str, state: str):
+    """Helper to set the current conversation state (used by the strict state machine)"""
+    session = get_session(user) or {}
+    session["state"] = state
+    save_session(user, session)
+
+def get_current_state(user: str) -> str:
+    """Helper to get the current conversation state"""
+    session = get_session(user)
+    return session.get("state", "MENU") if session else "MENU"
