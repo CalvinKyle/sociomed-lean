@@ -1,13 +1,20 @@
+# app/services/catalog.py
+
 from typing import Dict, List
 
 from rapidfuzz import process
 
 from app.core.cache import get_cached_data
 from app.core.config import DEFAULT_CURRENCY
+from app.core.exchange_rates import convert_price
 from app.services.search import find_product, get_results
 
 
-def _build_offer(product: Dict, result: Dict) -> Dict:
+def _build_offer(product: Dict, result: Dict, currency: str = DEFAULT_CURRENCY) -> Dict:
+    """
+    Build a catalog offer from search result.
+    Prices are already converted by get_results(), just extract them.
+    """
     pricing = result.get("pricing", [])
     all_prices = [tier["unit_price"] for tier in pricing]
     return {
@@ -21,11 +28,19 @@ def _build_offer(product: Dict, result: Dict) -> Dict:
         "max_price": max(all_prices) if all_prices else result.get("default_price"),
         "stock_qty": result.get("stock_qty", 0),
         "lead_time_days": result.get("lead_time_days"),
-        "currency": DEFAULT_CURRENCY,
+        "currency": currency,  # Always set to buyer's detected currency
     }
 
 
-def search_catalog(query: str, limit: int = 5) -> List[Dict]:
+def search_catalog(query: str, limit: int = 5, currency: str = DEFAULT_CURRENCY) -> List[Dict]:
+    """
+    Search catalog and return offers in buyer's currency.
+    
+    Args:
+        query: Search term from buyer
+        limit: Max results to return
+        currency: Buyer's currency (detected from phone or IP)
+    """
     data = get_cached_data()
     products = data.get("products", [])
     aliases = data.get("aliases", [])
@@ -50,14 +65,22 @@ def search_catalog(query: str, limit: int = 5) -> List[Dict]:
 
     offers: List[Dict] = []
     for product in matches:
-        results = get_results(product["product_id"], data)
-        offers.extend(_build_offer(product, result) for result in results)
+        # get_results() now handles currency conversion internally
+        results = get_results(product["product_id"], data, currency=currency)
+        offers.extend(_build_offer(product, result, currency=currency) for result in results)
 
     offers.sort(key=lambda offer: (offer["starting_price"] or 999999999, -(offer["stock_qty"] or 0)))
     return offers[:limit]
 
 
-def get_featured_catalog(limit: int = 6) -> List[Dict]:
+def get_featured_catalog(limit: int = 6, currency: str = DEFAULT_CURRENCY) -> List[Dict]:
+    """
+    Get featured catalog offers in buyer's currency.
+    
+    Args:
+        limit: Max featured products to return
+        currency: Buyer's currency (detected from phone or IP)
+    """
     data = get_cached_data()
     products_by_id = {product["product_id"]: product for product in data.get("products", [])}
 
@@ -79,11 +102,12 @@ def get_featured_catalog(limit: int = 6) -> List[Dict]:
         if not product:
             continue
 
-        results = get_results(product_id, data)
+        # get_results() now handles currency conversion internally
+        results = get_results(product_id, data, currency=currency)
         if not results:
             continue
 
-        featured.append(_build_offer(product, results[0]))
+        featured.append(_build_offer(product, results[0], currency=currency))
         seen_product_ids.add(product_id)
 
         if len(featured) >= limit:
