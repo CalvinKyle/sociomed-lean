@@ -12,7 +12,7 @@ from app.core.utils import (
     log_audit_event,
 )
 from app.services.search import find_product, get_results
-from app.schemas.formatter import format_results
+from app.models.formatter import format_results
 from app.core.cache import get_cached_data  # ← New helper we'll add in core/cache.py
 
 
