@@ -1,3 +1,5 @@
+from app.core.currency import format_price
+
 def group_results(results):
     grouped = {}
     for r in results:
@@ -6,19 +8,20 @@ def group_results(results):
     return grouped
 
 
-def format_pricing_tiers(tiers):
+def format_pricing_tiers(tiers, currency="UGX"):
     lines = []
     for t in tiers[:3]:
+        price = format_price(t["unit_price"], currency)
         if t["max_qty"]:
-            lines.append(f"{t['min_qty']}-{t['max_qty']} units: UGX {t['unit_price']}")
+            lines.append(f"{t['min_qty']}-{t['max_qty']} units: {price}")
         else:
-            lines.append(f"{t['min_qty']}+ units: UGX {t['unit_price']}")
+            lines.append(f"{t['min_qty']}+ units: {price}")
     return "\n".join(lines)
 
 
-def format_results(product_name, results):
+def format_results(product_name, results, currency="UGX"):
     if not results:
-        return "No options available", []
+        return "No options available. Type 0 to return to the menu.", []
 
     grouped = group_results(results)
 
@@ -35,11 +38,11 @@ def format_results(product_name, results):
         ]
 
         msg += f"*{counter}. {brand}*\n"
-        msg += f"UGX {min(all_prices)} – {max(all_prices)}\n"
+        msg += f"{format_price(min(all_prices), currency)} – {format_price(max(all_prices), currency)}\n"
 
         for item in items[:2]:
-            msg += format_pricing_tiers(item["pricing"]) + "\n"
-            msg += f"Stock: {item['stock']} | {item['lead_time_days']} days\n\n"
+            msg += format_pricing_tiers(item["pricing"], currency) + "\n"
+            msg += f"Stock: {item['stock']} | Lead time: {item['lead_time_days']} days\n\n"
 
         option_map.append({
             "option": counter,
@@ -54,6 +57,7 @@ def format_results(product_name, results):
         "1 → Request official quotation (PFI)\n"
         "2 → Get best-value recommendation\n"
         "3 → Refine quantity/specifications\n"
+        "0 → Main menu"
     )
 
     return msg, option_map
