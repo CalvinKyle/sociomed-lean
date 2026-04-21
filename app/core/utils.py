@@ -63,11 +63,10 @@ def release_session_lock(user: str) -> None:
     redis_client.delete(f"session_lock:{user}")
 
 async def notify_vendor(vendor_phone: str, message: str) -> bool:
-    # (same as before)
     if not vendor_phone:
-        logger.warning("Vendor phone missing")
+        logger.warning("Vendor phone missing - cannot notify vendor")
         return False
-    success = send_whatsapp_message(vendor_phone, message)
+    success = await send_whatsapp_message(vendor_phone, message)
     if not success:
         logger.error(f"Failed to notify vendor {vendor_phone}")
     return success
