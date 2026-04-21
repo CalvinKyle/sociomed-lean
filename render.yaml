@@ -49,12 +49,31 @@ services:
       - key: DEFAULT_CURRENCY
         value: UGX
 
+  # render.yaml — replace the Celery worker block
+
   - type: worker
     name: sociomed-lean-celery-worker
     env: python
     region: us-east
-    plan: starter   # or free for testing
-    command: celery -A app.core.celery_app worker --loglevel=info
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
+    envVars:
+      - key: DATABASE_URL
+        fromService:
+          name: sociomed-postgres
+          type: pgsql
+          property: connectionString
+      - key: REDIS_HOST
+        fromService:
+          name: sociomed-redis
+          type: redis
+          property: host
+      - key: REDIS_PORT
+        fromService:
+          name: sociomed-redis
+          type: redis
+          property: port
 
   # ── Flower Monitoring Dashboard (added)
   - type: web
