@@ -4,7 +4,7 @@ from typing import Dict, Any
 import logging
 
 from app.core.config import REDIS_HOST, REDIS_PORT, CACHE_TTL_SECONDS
-from app.schemas.db import load_data   # This pulls the full dataset from PostgreSQL
+from app.models.db import load_data   # This pulls the full dataset from PostgreSQL
 
 logger = logging.getLogger(__name__)
 
