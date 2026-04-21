@@ -39,12 +39,19 @@ def get_results(product_id: str, data: Dict) -> List[Dict]:
         pricing_tiers = data.get("pricing_by_inventory", {}).get(inv["inventory_id"], [])
         if not pricing_tiers:
             continue
+
+        pricing_tiers = sorted(pricing_tiers, key=lambda x: x["min_qty"])
+        first_tier = pricing_tiers[0]
         
         results.append({
+            "inventory_id": inv.get("inventory_id"),
+            "product_id": product_id,
             "brand": inv.get("brand", "Generic"),
-            "stock": inv.get("stock_qty", 0),
+            "stock_qty": inv.get("stock_qty", 0),
             "lead_time_days": inv.get("lead_time_days", "N/A"),
-            "pricing": sorted(pricing_tiers, key=lambda x: x["min_qty"]),
+            "pricing": pricing_tiers,
+            "min_qty": first_tier.get("min_qty", 1),
+            "default_price": first_tier.get("unit_price"),
             "vendor_id": vendor["vendor_id"],
             "vendor_phone": vendor.get("phone"),
             "vendor_name": vendor.get("name", ""),
@@ -52,4 +59,4 @@ def get_results(product_id: str, data: Dict) -> List[Dict]:
     
     # Sort by lowest entry price so the best deal surfaces first
     results.sort(key=lambda r: r["pricing"][0]["unit_price"] if r["pricing"] else 999999)
-    return results   # <-- THIS is the fix. Was indented inside the for loop.
+    return results
