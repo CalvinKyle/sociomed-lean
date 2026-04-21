@@ -1,5 +1,3 @@
-# app/services/search.py  —  FULL FILE REPLACEMENT
-
 from typing import Dict, List, Optional
 from rapidfuzz import process
 import logging
