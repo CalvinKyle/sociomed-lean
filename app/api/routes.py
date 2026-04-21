@@ -56,19 +56,23 @@ async def health_check():
 
 
 @router.get("/catalog/featured", response_model=FeaturedCatalogResponse, tags=["go-to-market"])
-async def featured_catalog(limit: int = Query(default=6, ge=1, le=20)):
-    featured = get_featured_catalog(limit=limit)
+async def featured_catalog(
+    limit: int = Query(default=6, ge=1, le=20),
+    currency: str = Query(default="UGX", description="Currency code (UGX, KES, etc.)")
+):
+    """Featured catalog offers in buyer's currency."""
+    featured = get_featured_catalog(limit=limit, currency=currency)
     return FeaturedCatalogResponse(total_featured=len(featured), featured=featured)
-
 
 @router.get("/catalog/search", response_model=CatalogSearchResponse, tags=["go-to-market"])
 async def public_catalog_search(
     q: str = Query(..., min_length=2, description="Search term from a procurement buyer"),
     limit: int = Query(default=5, ge=1, le=20),
+    currency: str = Query(default="UGX", description="Currency code (UGX, KES, etc.)")
 ):
-    matches = search_catalog(q, limit=limit)
+    """Search catalog with results in buyer's currency."""
+    matches = search_catalog(q, limit=limit, currency=currency)
     return CatalogSearchResponse(query=q, total_matches=len(matches), matches=matches)
-
 
 @router.post("/leads", response_model=BuyerLeadResponse, status_code=201, tags=["go-to-market"])
 async def capture_buyer_lead(payload: BuyerLeadCreate, db: Session = Depends(get_db)):
