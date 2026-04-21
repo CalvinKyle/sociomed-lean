@@ -1,6 +1,10 @@
+# app/services/search.py
+
 from typing import Dict, List, Optional
 from rapidfuzz import process
 import logging
+
+from app.core.exchange_rates import convert_result_prices
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +29,18 @@ def find_product(query: str, products: List[Dict], aliases: List[Dict]) -> Optio
     return None
 
 
-def get_results(product_id: str, data: Dict) -> List[Dict]:
-    """Get all available vendor options for a product. Uses pre-built indexes — O(1) lookups."""
+def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict]:
+    """
+    Get all available vendor options for a product with prices in buyer's currency.
+    
+    Args:
+        product_id: Product to search for
+        data: Cached data with pre-built indexes
+        currency: Target currency for price conversion (detected from buyer's phone)
+    
+    Returns:
+        List of results with prices converted to buyer's currency
+    """
     results = []
     
     inventory_items = data.get("inventory_by_product", {}).get(product_id, [])
@@ -40,23 +54,29 @@ def get_results(product_id: str, data: Dict) -> List[Dict]:
         if not pricing_tiers:
             continue
 
+        # Pricing tiers are in base currency (UGX) from Google Sheets
         pricing_tiers = sorted(pricing_tiers, key=lambda x: x["min_qty"])
         first_tier = pricing_tiers[0]
         
-        results.append({
+        result = {
             "inventory_id": inv.get("inventory_id"),
             "product_id": product_id,
             "brand": inv.get("brand", "Generic"),
             "stock_qty": inv.get("stock_qty", 0),
             "lead_time_days": inv.get("lead_time_days", "N/A"),
-            "pricing": pricing_tiers,
+            "pricing": pricing_tiers,  # Still in base currency
             "min_qty": first_tier.get("min_qty", 1),
-            "default_price": first_tier.get("unit_price"),
+            "default_price": first_tier.get("unit_price"),  # Still in base currency
             "vendor_id": vendor["vendor_id"],
             "vendor_phone": vendor.get("phone"),
             "vendor_name": vendor.get("name", ""),
-        })
+        }
+        
+        # Convert prices to buyer's currency
+        result = convert_result_prices(result, currency)
+        
+        results.append(result)
     
-    # Sort by lowest entry price so the best deal surfaces first
+    # Sort by lowest entry price (now in buyer's currency)
     results.sort(key=lambda r: r["pricing"][0]["unit_price"] if r["pricing"] else 999999)
     return results
