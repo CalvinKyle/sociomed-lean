@@ -1,1 +1,1 @@
-"""Application package for SocioMed Lean."""
+# Application package for SocioMed Lean
