@@ -44,8 +44,8 @@ async def handle_incoming_message(message: Dict):
     # ── STEP 0: Entry Point / Session Timeout
     if not session or current_state == "IDLE":
         welcome = (
-            "👋 Welcome to SocioMed Marketplace!\n\n"
-            "Your reliable partner for quality medical equipment, consumables and devices in Uganda.\n\n"
+            "👋 Welcome to SocioMed!\n\n"
+            "Your procurement partner for quality medical equipment, consumables and devices in East Africa.\n\n"
             "How can I help you today?\n\n"
             "Reply with a number:\n"
             "1️⃣ Search for products\n"
