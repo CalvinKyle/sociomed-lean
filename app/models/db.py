@@ -1,9 +1,15 @@
-import os
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+from datetime import datetime
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+
 from app.core.config import DATABASE_URL
 
-engine = create_engine(DATABASE_URL, echo=False)
+engine_kwargs = {"echo": False, "future": True}
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -43,8 +49,52 @@ class Alias(Base):
     alias = Column(String, nullable=False)
     product_id = Column(String, ForeignKey("products.product_id"))
 
+
+class BuyerLead(Base):
+    __tablename__ = "buyer_leads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    buyer_name = Column(String, nullable=False)
+    organization = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    email = Column(String)
+    role = Column(String)
+    country = Column(String)
+    use_case = Column(Text)
+    source = Column(String, default="api", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RFQRequest(Base):
+    __tablename__ = "rfq_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    buyer_name = Column(String, nullable=False)
+    organization = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    email = Column(String)
+    product_id = Column(String)
+    product_name = Column(String, nullable=False)
+    vendor_id = Column(String)
+    vendor_name = Column(String)
+    quantity = Column(Integer, nullable=False, default=1)
+    delivery_location = Column(String, nullable=False)
+    notes = Column(Text)
+    currency = Column(String, default="UGX", nullable=False)
+    source = Column(String, default="api", nullable=False)
+    status = Column(String, default="new", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 def load_data():
     """Returns EXACT same format as sheets.py so nothing else breaks"""
