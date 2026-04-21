@@ -13,7 +13,8 @@ from app.core.utils import (
 )
 from app.services.search import find_product, get_results
 from app.models.formatter import format_results
-from app.core.cache import get_cached_data  # ← New helper we'll add in core/cache.py
+from app.core.cache import get_cached_data
+from app.core.currency import get_currency_for_phone
 
 
 def extract_message(body: Dict) -> Optional[Dict]:
@@ -29,6 +30,7 @@ async def handle_incoming_message(message: Dict):
     text = message["text"]["body"].strip()
     sender = message["from"]
     text_clean = text.lower()
+    currency = get_currency_for_phone(sender)
 
     session = get_session(sender) or {}
     current_state = session.get("state", "MENU")
