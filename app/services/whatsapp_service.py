@@ -243,7 +243,7 @@ async def handle_incoming_message(message: Dict):
             save_session(sender, {"state": "SEARCHING"})
             return
 
-        results = get_results(product["product_id"], data)
+        results = get_results(product["product_id"], data, currency=currency)
         if not results:
             await send_whatsapp_message(
                 sender,
