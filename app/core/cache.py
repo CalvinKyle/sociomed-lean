@@ -3,15 +3,14 @@ import redis
 from typing import Dict, Any
 import logging
 
-from app.core.config import REDIS_HOST, REDIS_PORT, CACHE_TTL_SECONDS
+from app.core.config import CACHE_TTL_SECONDS, build_redis_url
 from app.models.db import load_data   # This pulls the full dataset from PostgreSQL
 
 logger = logging.getLogger(__name__)
 
 # Global Redis client (created once when the module is imported)
-redis_client = redis.Redis(
-    host=REDIS_HOST,
-    port=REDIS_PORT,
+redis_client = redis.Redis.from_url(
+    build_redis_url(),
     decode_responses=True,      # Automatically converts bytes to str
     socket_timeout=5,
     socket_connect_timeout=5,

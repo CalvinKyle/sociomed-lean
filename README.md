@@ -39,12 +39,33 @@ Once deployed, these are the endpoints worth handing to your first design partne
 Recommended runtime: Python 3.11. The repo is now pinned with [runtime.txt](/Users/calvinainebyona/Desktop/sociomed-lean/runtime.txt).
 
 ```bash
+cp .env.example .env.local
 pip install -r requirements.txt
+alembic upgrade head
 python3 sync_sheets_to_db.py
 uvicorn app.main:app --reload
 ```
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) to test the procurement endpoints.
+
+Production environment reference: [docs/ENVIRONMENTS.md](/Users/calvinainebyona/Desktop/sociomed-lean/docs/ENVIRONMENTS.md)
+
+## Environment Sections
+
+These are the concrete setup sections you need to address next:
+
+1. Shared identity and routing
+   Set `APP_ENV`, `PUBLIC_BASE_URL`, `SUPPORT_EMAIL`, `SALES_AGENT_PHONE`, `DEFAULT_CURRENCY`, `ENABLE_OPEN_DOCS`, and `LOG_LEVEL`.
+2. Meta WhatsApp Cloud API
+   Set `VERIFY_TOKEN`, `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID`, and `WHATSAPP_APP_SECRET`.
+3. Google Sheets sync
+   Use `GOOGLE_CREDS_FILE=.secrets/google-service-account.json` locally or `GOOGLE_CREDS_JSON` in production, plus `SHEET_NAME=sociomed_db`.
+4. Database and Redis
+   Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=1800`, and `CACHE_TTL_SECONDS=300`.
+5. Render deployment
+   The web service and Celery worker must share the same WhatsApp, Postgres, Redis, and sales-routing variables.
+
+Use [.env.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.example) for local machines and [.env.production.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.production.example) for production values.
 
 ## Architecture
 

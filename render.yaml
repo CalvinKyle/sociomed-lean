@@ -11,6 +11,8 @@ services:
     autoDeploy: false
     
     envVars:
+      - key: APP_ENV
+        value: production
       - key: LOG_LEVEL
         value: INFO
       - key: PYTHONUNBUFFERED
@@ -23,8 +25,18 @@ services:
         sync: false
       - key: WHATSAPP_APP_SECRET
         sync: false
+      - key: SALES_AGENT_PHONE
+        sync: false
+      - key: SUPPORT_EMAIL
+        value: sales@sociomed.co
+      - key: PUBLIC_BASE_URL
+        value: https://api.sociomed.co
+      - key: ENABLE_OPEN_DOCS
+        value: "false"
       - key: GOOGLE_CREDS_FILE
-        value: credentials.json
+        value: .secrets/google-service-account.json
+      - key: GOOGLE_CREDS_JSON
+        sync: false
       - key: SHEET_NAME
         value: sociomed_db
       - key: DATABASE_URL
@@ -59,6 +71,24 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
     envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: SALES_AGENT_PHONE
+        sync: false
+      - key: SUPPORT_EMAIL
+        value: sales@sociomed.co
+      - key: PUBLIC_BASE_URL
+        value: https://api.sociomed.co
+      - key: DEFAULT_CURRENCY
+        value: UGX
       - key: DATABASE_URL
         fromService:
           name: sociomed-postgres
@@ -84,6 +114,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A app.core.celery_app flower --address=0.0.0.0 --port=$PORT --basic-auth=admin:$FLOWER_PASSWORD
     envVars:
+      - key: APP_ENV
+        value: production
       - key: REDIS_HOST
         fromService:
           name: sociomed-redis

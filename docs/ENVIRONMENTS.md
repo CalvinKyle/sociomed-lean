@@ -1,0 +1,107 @@
+# SocioMed Environments
+
+This repo now supports two safe environment patterns:
+
+- Local machines: `.env.local` plus a local Google credentials file in `.secrets/`
+- Production: environment variables only, including `GOOGLE_CREDS_JSON`
+
+## 1. Shared Identity
+
+Set these in every environment:
+
+| Variable | Local value | Production value | Notes |
+| --- | --- | --- | --- |
+| `APP_ENV` | `development` | `production` | Production turns on stricter startup validation. |
+| `PUBLIC_BASE_URL` | `http://localhost:8000` | `https://api.sociomed.co` | Use your Render URL first if the custom domain is not live yet. |
+| `SUPPORT_EMAIL` | `sales@sociomed.co` | `sales@sociomed.co` | Buyer-facing contact. |
+| `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 ops number | This is where buyer leads and RFQs are forwarded. |
+| `DEFAULT_CURRENCY` | `UGX` | `UGX` | Buyer phone prefixes still override this where supported. |
+| `ENABLE_OPEN_DOCS` | `true` | `false` | Keep docs off in production. |
+| `LOG_LEVEL` | `INFO` | `INFO` | Raise to `DEBUG` only when actively troubleshooting. |
+
+## 2. Meta WhatsApp Cloud API
+
+These power `/api/webhook` and all outbound WhatsApp notifications:
+
+| Variable | Value to set |
+| --- | --- |
+| `VERIFY_TOKEN` | `sociomed-local-webhook` locally and `sociomed-prod-webhook` in production |
+| `WHATSAPP_TOKEN` | Paste the permanent Meta system-user token |
+| `PHONE_NUMBER_ID` | Paste the Meta WhatsApp phone number ID |
+| `WHATSAPP_APP_SECRET` | Paste the Meta app secret used for webhook signature validation |
+
+The webhook URL should be `https://api.sociomed.co/api/webhook` once production is live.
+
+## 3. Google Sheets Sync
+
+Use one of these, not both:
+
+- Local machines:
+  - `GOOGLE_CREDS_FILE=.secrets/google-service-account.json`
+  - Put the downloaded Google service account JSON file at `.secrets/google-service-account.json`
+- Production:
+  - `GOOGLE_CREDS_JSON=` and paste the full service-account JSON as a single-line value
+
+Use:
+
+- `SHEET_NAME=sociomed_db`
+
+That keeps the sync script consistent on your laptop, VS Code, Codex, and Render shell sessions.
+
+## 4. Data Layer
+
+Use the same database and Redis instance for the web service and the Celery worker:
+
+| Variable | Local value | Production value |
+| --- | --- | --- |
+| `DATABASE_URL` | `postgresql://sociomed:sociomed_dev_password@localhost:5432/sociomed_local` | Render Postgres internal connection string |
+| `REDIS_URL` | `redis://localhost:6379/0` | Render Redis internal connection string |
+| `SESSION_TTL` | `1800` | `1800` |
+| `CACHE_TTL_SECONDS` | `300` | `300` |
+
+The app now preserves Redis credentials from `REDIS_URL`, which matters for managed Redis services.
+
+## 5. Render Services
+
+You need three services:
+
+1. `sociomed-lean` web API
+2. `sociomed-lean-celery-worker` Celery worker
+3. `sociomed-lean-flower` optional monitoring dashboard
+
+Important production rule:
+
+- The worker must receive the same WhatsApp, Postgres, Redis, and sales-routing variables as the web service.
+
+That mismatch was a deploy blocker before this update; it is now reflected in [render.yaml](/Users/calvinainebyona/Desktop/sociomed-lean/render.yaml).
+
+## 6. Cross-Device Workflow
+
+Use this pattern so your laptop, VS Code, and Codex stay in sync without copying secrets through git:
+
+1. Keep code in git.
+2. Keep local secrets in `.env.local` and `.secrets/`.
+3. Keep production secrets in Render.
+4. Keep the authoritative secret values in one shared vault outside the repo.
+5. Never commit `.env*`, `.secrets/`, or `credentials.json`.
+
+## 7. Fastest Production Sequence
+
+1. Fill in [.env.production.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.production.example) with the real production values.
+2. Mirror those values into Render for both the web service and the worker.
+3. Deploy the API and worker.
+4. Run `alembic upgrade head`.
+5. Run `python3 sync_sheets_to_db.py` against production once the Google credentials are in place.
+6. Verify `/api/health`, `/api/catalog/featured`, `/api/catalog/search?q=gloves`, `POST /api/leads`, `POST /api/rfqs`, and the Meta webhook verification flow.
+7. Point Meta at `https://api.sociomed.co/api/webhook`.
+
+## 8. Local Machine Bootstrap
+
+1. Copy [.env.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.example) to `.env.local`.
+2. Create `.secrets/google-service-account.json`.
+3. Start local Postgres and Redis.
+4. Run `pip install -r requirements.txt`.
+5. Run `alembic upgrade head`.
+6. Run `python3 sync_sheets_to_db.py`.
+7. Start the API with `uvicorn app.main:app --reload`.
+8. Start the worker with `celery -A app.core.celery_app worker --loglevel=info`.

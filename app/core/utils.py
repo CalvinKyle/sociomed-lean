@@ -5,12 +5,12 @@ import logging
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
-from app.core.config import REDIS_HOST, REDIS_PORT, SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID
+from app.core.config import SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID, build_redis_url
 
 logger = logging.getLogger(__name__)
 
 # Redis client for sessions + caching
-redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+redis_client = redis.Redis.from_url(build_redis_url(), decode_responses=True)
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
 async def send_whatsapp_message(to: str, message: str) -> bool:

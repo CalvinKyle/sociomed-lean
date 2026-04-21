@@ -1,7 +1,6 @@
 import logging
 import logging.config
 import os
-import sys
 
 class CorrelationIdFilter(logging.Filter):
     def filter(self, record):
@@ -9,6 +8,7 @@ class CorrelationIdFilter(logging.Filter):
             record.correlation_id = "-"
         return True
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 LOGGING_CONFIG = {
     "version": 1,
@@ -36,14 +36,14 @@ LOGGING_CONFIG = {
             "class": "logging.StreamHandler",
             "formatter": "standard",
             "filters": ["correlation_id"],
-            "level": "INFO",
+            "level": LOG_LEVEL,
             "stream": "ext://sys.stdout",
         },
     },
     "loggers": {
         "": {
             "handlers": ["audit_file", "console"],
-            "level": "INFO",
+            "level": LOG_LEVEL,
         },
     },
 }

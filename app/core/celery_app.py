@@ -1,11 +1,11 @@
 from celery import Celery
-from app.core.config import REDIS_HOST, REDIS_PORT
+from app.core.config import build_redis_url
 
 # Celery app
 celery_app = Celery(
     "sociomed_tasks",
-    broker=f"redis://{REDIS_HOST}:{REDIS_PORT}/0",
-    backend=f"redis://{REDIS_HOST}:{REDIS_PORT}/1",
+    broker=build_redis_url(db=0),
+    backend=build_redis_url(db=1),
 )
 
 celery_app.conf.update(
