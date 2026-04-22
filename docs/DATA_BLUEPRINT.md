@@ -2,6 +2,16 @@
 
 This is the refined translation of the co-founder clarifications into the current `sociomed-lean` repo.
 
+## Confirmed Product Decision
+
+SocioMed is staying `RFQ-first`.
+
+That means:
+
+- The current WhatsApp flow should optimize for sourcing, offer comparison, and quotation capture.
+- We should persist leads and RFQs, not build a mandatory cart-and-order checkout flow.
+- Any future "checkout" work should only happen if the business model shifts toward direct ordering.
+
 ## What Is Already Aligned
 
 The repo already uses the "Clean 5" marketplace structure:
@@ -70,7 +80,7 @@ These are strong product ideas, but they are not same-day launch blockers:
 1. Multi-item request splitting
    The current WhatsApp flow routes multi-item requests into RFQ mode, but it does not yet build a full parsed multi-line cart.
 2. Short-form session cart with checkout branching
-   Redis already stores the user session, but there is no dedicated cart model or `Checkout` flow yet.
+   Redis already stores the user session, but there is no dedicated cart model or `Checkout` flow yet. That is intentional while we remain RFQ-first.
 3. Equipment-to-consumables recommendations
    The catalog does not yet model cross-sell relationships between equipment and consumables.
 4. PFI or PDF generation

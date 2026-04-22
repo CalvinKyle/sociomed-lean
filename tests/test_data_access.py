@@ -37,6 +37,14 @@ def test_get_products_returns_live_catalog_rows(monkeypatch):
     assert products[0]["product_id"] == "p1"
 
 
+def test_get_products_by_category_filters_rows(monkeypatch):
+    monkeypatch.setattr(catalog_access, "get_cached_data", _sample_catalog_data)
+
+    products = catalog_access.get_products_by_category("consumables")
+
+    assert [product["product_id"] for product in products] == ["p3", "p1"]
+
+
 def test_validation_helpers_cover_current_procurement_flow():
     products = _sample_catalog_data()["products"]
 
@@ -48,3 +56,9 @@ def test_validation_helpers_cover_current_procurement_flow():
     assert validate_delivery_location("Kampala")
     assert validate_state(ConversationState.SEARCHING.value)
     assert not validate_state("CHECKOUT")
+
+
+def test_get_config_exposes_rfq_first_operating_model():
+    config = catalog_access.get_config()
+
+    assert config["operating_model"] == "rfq_first"

@@ -36,9 +36,11 @@ async def root():
     return {
         "message": "SocioMed Lean procurement API",
         "status": "running",
+        "operating_model": "rfq_first",
         "audience": ["procurement teams", "suppliers"],
         "actions": {
             "featured_catalog": "/api/catalog/featured",
+            "browse_categories": "/api/catalog/categories",
             "catalog_search_example": "/api/catalog/search?q=surgical gloves",
             "submit_rfq": "/api/rfqs",
             "capture_lead": "/api/leads",

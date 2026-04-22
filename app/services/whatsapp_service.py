@@ -13,6 +13,7 @@ from app.core.validators import (
     validate_state,
     validate_whatsapp_message,
 )
+from app.data_access.catalog import get_categories, get_products_by_category
 from app.models.db import SessionLocal
 from app.models.formatter import format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
@@ -46,7 +47,8 @@ def _main_menu() -> str:
         "2. View featured offers\n"
         "3. Request a quotation\n"
         "4. Talk to sales\n"
-        "5. Help"
+        "5. Help\n"
+        "6. Browse by category"
     )
 
 
@@ -54,8 +56,10 @@ def _help_message() -> str:
     return (
         "How SocioMed works:\n"
         "1. Search a product such as surgical gloves or oxygen mask.\n"
-        "2. Compare supplier offers by price, stock, and lead time.\n"
-        "3. Request a quotation and we notify the supplier or sales team.\n\n"
+        "2. View featured offers when you want a quick shortlist.\n"
+        "3. Request a quotation and we notify the supplier or sales team.\n"
+        "4. Talk to sales for urgent or complex sourcing needs.\n"
+        "6. Browse by category when you want to scan product families first.\n\n"
         "Use 0 at any time to return to the main menu."
     )
 
@@ -77,6 +81,81 @@ def _featured_offers_message(currency: str) -> str:
 
     lines.append("\nReply with the product name you want to search, or reply 3 to request a quotation.")
     return "\n\n".join(lines)
+
+
+def _browse_categories_message(categories: list[str]) -> str:
+    if not categories:
+        return "No catalog categories are available right now. Reply 1 to search directly or 3 to request a quotation."
+
+    lines = ["Browse procurement categories:\n"]
+    for index, category in enumerate(categories, start=1):
+        lines.append(f"{index}. {category.title()}")
+
+    lines.append("\nReply with the category number or exact category name.")
+    lines.append("Use 0 at any time to return to the main menu.")
+    return "\n".join(lines)
+
+
+def _category_products_message(category_name: str, products: list[Dict], display_limit: int = 12) -> str:
+    if not products:
+        return (
+            f"We do not have products listed in {category_name.title()} yet.\n"
+            "Reply with another category number, or use 0 to return to the main menu."
+        )
+
+    display_products = products[:display_limit]
+    lines = [f"{category_name.title()} products:\n"]
+    for index, product in enumerate(display_products, start=1):
+        lines.append(f"{index}. {product['name']}")
+
+    if len(products) > display_limit:
+        lines.append("")
+        lines.append("Type the exact product name if you do not see it in the numbered list.")
+
+    lines.append("")
+    lines.append("Reply with the product number you want to price first, or type the exact product name.")
+    lines.append("Use 0 at any time to return to the main menu.")
+    return "\n".join(lines)
+
+
+def _resolve_category_selection(text: str, categories: list[str]) -> Optional[str]:
+    if text.isdigit():
+        index = int(text) - 1
+        if 0 <= index < len(categories):
+            return categories[index]
+        return None
+
+    normalized_text = text.strip().lower()
+    exact_matches = [category for category in categories if category.lower() == normalized_text]
+    if exact_matches:
+        return exact_matches[0]
+
+    partial_matches = [category for category in categories if normalized_text in category.lower()]
+    if len(partial_matches) == 1:
+        return partial_matches[0]
+
+    return None
+
+
+def _resolve_category_product_selection(text: str, category_name: str, displayed_products: list[Dict]) -> Optional[Dict]:
+    if text.isdigit():
+        index = int(text) - 1
+        if 0 <= index < len(displayed_products):
+            return displayed_products[index]
+        return None
+
+    normalized_text = text.strip().lower()
+    category_products = get_products_by_category(category_name)
+
+    exact_matches = [product for product in category_products if product["name"].lower() == normalized_text]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+
+    partial_matches = [product for product in category_products if normalized_text in product["name"].lower()]
+    if len(partial_matches) == 1:
+        return partial_matches[0]
+
+    return None
 
 
 def _split_pipe_message(text: str) -> list[str]:
@@ -251,8 +330,18 @@ async def handle_incoming_message(message: Dict):
             await send_whatsapp_message(sender, _help_message())
             _transition_session(sender, current_state, ConversationState.MENU)
             return
+        if text_clean == "6":
+            categories = get_categories()
+            await send_whatsapp_message(sender, _browse_categories_message(categories))
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.BROWSING_CATEGORIES,
+                categories=categories,
+            )
+            return
 
-        await send_whatsapp_message(sender, "Please reply with a number from 1 to 5.")
+        await send_whatsapp_message(sender, "Please reply with a number from 1 to 6.")
         return
 
     if current_state == ConversationState.SEARCHING.value:
@@ -311,6 +400,60 @@ async def handle_incoming_message(message: Dict):
             current_state,
             ConversationState.VIEWING_RESULTS,
             product=product,
+            options=option_map,
+        )
+        await send_whatsapp_message(sender, reply)
+        return
+
+    if current_state == ConversationState.BROWSING_CATEGORIES.value:
+        categories = session.get("categories") or get_categories()
+        selected_category = _resolve_category_selection(text_clean, categories)
+        if not selected_category:
+            await send_whatsapp_message(
+                sender,
+                "Please reply with one of the category numbers shown, or type the exact category name.",
+            )
+            return
+
+        category_products = get_products_by_category(selected_category)
+        displayed_products = category_products[:12]
+        await send_whatsapp_message(sender, _category_products_message(selected_category, category_products))
+        _transition_session(
+            sender,
+            current_state,
+            ConversationState.CATEGORY_SELECTED,
+            category_name=selected_category,
+            category_products=displayed_products,
+        )
+        return
+
+    if current_state == ConversationState.CATEGORY_SELECTED.value:
+        category_name = session.get("category_name", "")
+        displayed_products = session.get("category_products", [])
+        selected_product = _resolve_category_product_selection(text, category_name, displayed_products)
+        if not selected_product:
+            await send_whatsapp_message(
+                sender,
+                "Please reply with one of the product numbers shown, or type the exact product name from that category.",
+            )
+            return
+
+        data = get_cached_data()
+        results = get_results(selected_product["product_id"], data, currency=currency)
+        if not results:
+            await send_whatsapp_message(
+                sender,
+                "We do not have a live offer for that product right now.\n"
+                "Reply with another product number, type another product name, or use 3 from the main menu to request a quotation.",
+            )
+            return
+
+        reply, option_map = format_results(selected_product["name"], results, currency=currency)
+        _transition_session(
+            sender,
+            current_state,
+            ConversationState.VIEWING_RESULTS,
+            product=selected_product,
             options=option_map,
         )
         await send_whatsapp_message(sender, reply)

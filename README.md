@@ -73,6 +73,14 @@ Use [.env.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.example) fo
 WhatsApp Cloud API -> FastAPI -> PostgreSQL + Redis  
 Google Sheets -> sync script -> PostgreSQL
 
+## Product Model
+
+SocioMed is intentionally `RFQ-first`.
+
+- Persist buyer leads and RFQs.
+- Do not force a cart-and-checkout order flow yet.
+- Use WhatsApp to shortlist offers, capture quantity, and route to supplier or sales follow-up.
+
 ## Local Data Model
 
 Primary catalog tables:
