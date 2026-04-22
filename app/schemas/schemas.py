@@ -25,6 +25,11 @@ class CatalogSearchResponse(BaseModel):
     matches: List[CatalogOffer]
 
 
+class CatalogCategoriesResponse(BaseModel):
+    total_categories: int
+    categories: List[str]
+
+
 class FeaturedCatalogResponse(BaseModel):
     generated_for: str = "procurement"
     total_featured: int

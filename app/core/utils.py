@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
 from app.core.config import SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID, build_redis_url
+from app.core.states import ConversationState, is_valid_state
 
 logger = logging.getLogger(__name__)
 
@@ -85,4 +86,7 @@ def set_state(user: str, state: str):
 def get_current_state(user: str) -> str:
     """Helper to get the current conversation state"""
     session = get_session(user)
-    return session.get("state", "MENU") if session else "MENU"
+    if not session:
+        return ConversationState.MENU.value
+    state = session.get("state", ConversationState.MENU.value)
+    return state if is_valid_state(state) else ConversationState.MENU.value

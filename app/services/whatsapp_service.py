@@ -1,8 +1,18 @@
+import logging
 import re
 from typing import Dict, Optional
 
 from app.core.currency import format_price, get_currency_for_phone
+from app.core.states import ConversationState
 from app.core.utils import get_session, log_audit_event, save_session, send_whatsapp_message
+from app.core.validators import (
+    validate_delivery_location,
+    validate_facility_name,
+    validate_product_query,
+    validate_quantity,
+    validate_state,
+    validate_whatsapp_message,
+)
 from app.models.db import SessionLocal
 from app.models.formatter import format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
@@ -15,6 +25,8 @@ from app.services.procurement import (
 )
 from app.services.search import find_products, get_results
 from app.core.cache import get_cached_data
+
+logger = logging.getLogger(__name__)
 
 
 def extract_message(body: Dict) -> Optional[Dict]:
@@ -106,6 +118,17 @@ def _parse_direct_rfq(text: str) -> Optional[tuple[str, int, str, str]]:
     return product_name, quantity, facility, location
 
 
+def _log_user_input(sender: str, state: str, text: str) -> None:
+    logger.info("whatsapp_input sender=%s state=%s text=%s", sender, state, text[:200])
+
+
+def _transition_session(sender: str, current_state: str, next_state: ConversationState, **payload) -> None:
+    logger.info("state_transition sender=%s from=%s to=%s", sender, current_state, next_state.value)
+    session_payload = {"state": next_state.value}
+    session_payload.update(payload)
+    save_session(sender, session_payload)
+
+
 async def _create_whatsapp_rfq(
     sender: str,
     product_name: str,
@@ -176,29 +199,37 @@ async def handle_incoming_message(message: Dict):
     currency = get_currency_for_phone(sender)
 
     session = get_session(sender) or {}
-    current_state = session.get("state", "MENU")
+    current_state = session.get("state", ConversationState.MENU.value)
+    if not validate_state(current_state):
+        logger.warning("invalid_state sender=%s state=%s", sender, current_state)
+        current_state = ConversationState.MENU.value
+    _log_user_input(sender, current_state, text)
+
+    if not validate_whatsapp_message(text):
+        await send_whatsapp_message(sender, "Please send a shorter message using normal text, numbers, and punctuation.")
+        return
 
     if text_clean in ["0", "m", "menu", "back"]:
         await send_whatsapp_message(sender, _main_menu())
-        save_session(sender, {"state": "MENU"})
+        _transition_session(sender, current_state, ConversationState.MENU)
         return
 
-    if not session or current_state == "IDLE":
+    if not session or current_state == ConversationState.IDLE.value:
         await send_whatsapp_message(sender, _main_menu())
-        save_session(sender, {"state": "MENU"})
+        _transition_session(sender, current_state, ConversationState.MENU)
         return
 
-    if current_state == "MENU":
+    if current_state == ConversationState.MENU.value:
         if text_clean == "1":
             await send_whatsapp_message(
                 sender,
                 "Please type the product you want to source, for example surgical gloves, IV set, or oxygen mask.",
             )
-            save_session(sender, {"state": "SEARCHING"})
+            _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
         if text_clean == "2":
             await send_whatsapp_message(sender, _featured_offers_message(currency))
-            save_session(sender, {"state": "SEARCHING"})
+            _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
         if text_clean == "3":
             await send_whatsapp_message(
@@ -206,7 +237,7 @@ async def handle_incoming_message(message: Dict):
                 "Reply in one message using this format:\n"
                 "item(s) | quantity | facility/client name | delivery location",
             )
-            save_session(sender, {"state": "DIRECT_RFQ"})
+            _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
             return
         if text_clean == "4":
             await send_whatsapp_message(
@@ -214,24 +245,31 @@ async def handle_incoming_message(message: Dict):
                 "Reply with: name | organization | what you need.\n"
                 "Example: Amina | City Care Hospital | Need 500 gloves urgently",
             )
-            save_session(sender, {"state": "TALK_TO_AGENT"})
+            _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
             return
         if text_clean == "5":
             await send_whatsapp_message(sender, _help_message())
-            save_session(sender, {"state": "MENU"})
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         await send_whatsapp_message(sender, "Please reply with a number from 1 to 5.")
         return
 
-    if current_state == "SEARCHING":
+    if current_state == ConversationState.SEARCHING.value:
         if "," in text or " and " in text_clean or "+" in text_clean:
             await send_whatsapp_message(
                 sender,
                 "For multi-item procurement lists, use the quotation flow.\n"
                 "Reply with: item(s) | quantity | facility/client name | delivery location",
             )
-            save_session(sender, {"state": "DIRECT_RFQ"})
+            _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
+            return
+
+        if not validate_product_query(text):
+            await send_whatsapp_message(
+                sender,
+                "Please enter a clear product search such as surgical gloves, IV set, or oxygen mask.",
+            )
             return
 
         data = get_cached_data()
@@ -246,7 +284,7 @@ async def handle_incoming_message(message: Dict):
                 f"{product_list}\n\n"
                 "Reply with the exact product name you want to price first, or reply 3 from the main menu for a bulk RFQ.",
             )
-            save_session(sender, {"state": "SEARCHING"})
+            _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
 
         product = product_matches[0] if product_matches else None
@@ -255,7 +293,7 @@ async def handle_incoming_message(message: Dict):
                 sender,
                 "I could not find that exact product. Try another search term, or reply 3 from the main menu to request a quotation.",
             )
-            save_session(sender, {"state": "SEARCHING"})
+            _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
 
         results = get_results(product["product_id"], data, currency=currency)
@@ -264,15 +302,21 @@ async def handle_incoming_message(message: Dict):
                 sender,
                 "We do not have a live offer for that product right now. Reply 3 from the main menu to request a quotation anyway.",
             )
-            save_session(sender, {"state": "MENU"})
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         reply, option_map = format_results(product["name"], results, currency=currency)
-        save_session(sender, {"state": "VIEWING_RESULTS", "product": product, "options": option_map})
+        _transition_session(
+            sender,
+            current_state,
+            ConversationState.VIEWING_RESULTS,
+            product=product,
+            options=option_map,
+        )
         await send_whatsapp_message(sender, reply)
         return
 
-    if current_state == "VIEWING_RESULTS":
+    if current_state == ConversationState.VIEWING_RESULTS.value:
         try:
             option_num = int(text_clean)
         except ValueError:
@@ -282,14 +326,13 @@ async def handle_incoming_message(message: Dict):
         options = session.get("options", [])
         if 1 <= option_num <= len(options):
             selected = options[option_num - 1]
-            save_session(
+            _transition_session(
                 sender,
-                {
-                    "state": "SELECTING_PRODUCT",
-                    "product": session.get("product"),
-                    "options": options,
-                    "selected_item": selected,
-                },
+                current_state,
+                ConversationState.SELECTING_PRODUCT,
+                product=session.get("product"),
+                options=options,
+                selected_item=selected,
             )
             await send_whatsapp_message(
                 sender,
@@ -304,28 +347,34 @@ async def handle_incoming_message(message: Dict):
         await send_whatsapp_message(sender, "That option is not available. Reply with one of the offer numbers shown.")
         return
 
-    if current_state == "SELECTING_PRODUCT":
+    if current_state == ConversationState.SELECTING_PRODUCT.value:
         try:
             quantity = int(text_clean)
         except ValueError:
             await send_whatsapp_message(sender, "Please reply with a quantity as a whole number.")
             return
 
+        if not validate_quantity(quantity):
+            await send_whatsapp_message(sender, "Please reply with a quantity greater than zero.")
+            return
+
         selected = session.get("selected_item", {})
         minimum_quantity = selected.get("min_qty", 1)
         if quantity < minimum_quantity:
-            await send_whatsapp_message(sender, f"Minimum order for this offer is {minimum_quantity} units.")
+            await send_whatsapp_message(
+                sender,
+                f"Minimum order for this offer is {minimum_quantity} {selected.get('uom', 'unit')}.",
+            )
             return
 
-        save_session(
+        _transition_session(
             sender,
-            {
-                "state": "VIEWING_PRICE",
-                "product": session.get("product"),
-                "options": session.get("options", []),
-                "selected_item": selected,
-                "quantity": quantity,
-            },
+            current_state,
+            ConversationState.VIEWING_PRICE,
+            product=session.get("product"),
+            options=session.get("options", []),
+            selected_item=selected,
+            quantity=quantity,
         )
         await send_whatsapp_message(
             sender,
@@ -338,21 +387,20 @@ async def handle_incoming_message(message: Dict):
         )
         return
 
-    if current_state == "VIEWING_PRICE":
+    if current_state == ConversationState.VIEWING_PRICE.value:
         if text_clean == "1":
             await send_whatsapp_message(
                 sender,
                 "Reply with your facility/client name and delivery location.\n"
                 "Example: Mulago Hospital, Kampala",
             )
-            save_session(
+            _transition_session(
                 sender,
-                {
-                    "state": "RFQ_FLOW",
-                    "product": session.get("product"),
-                    "selected_item": session.get("selected_item"),
-                    "quantity": session.get("quantity"),
-                },
+                current_state,
+                ConversationState.RFQ_FLOW,
+                product=session.get("product"),
+                selected_item=session.get("selected_item"),
+                quantity=session.get("quantity"),
             )
             return
         if text_clean == "2":
@@ -361,23 +409,21 @@ async def handle_incoming_message(message: Dict):
                 "Reply with: name | organization | what you need.\n"
                 "We will connect you with sales.",
             )
-            save_session(
+            _transition_session(
                 sender,
-                {
-                    "state": "TALK_TO_AGENT",
-                    "selected_item": session.get("selected_item"),
-                    "quantity": session.get("quantity"),
-                },
+                current_state,
+                ConversationState.TALK_TO_AGENT,
+                selected_item=session.get("selected_item"),
+                quantity=session.get("quantity"),
             )
             return
         if text_clean == "3":
-            save_session(
+            _transition_session(
                 sender,
-                {
-                    "state": "VIEWING_RESULTS",
-                    "product": session.get("product"),
-                    "options": session.get("options", []),
-                },
+                current_state,
+                ConversationState.VIEWING_RESULTS,
+                product=session.get("product"),
+                options=session.get("options", []),
             )
             await send_whatsapp_message(sender, "Returning to the supplier offers.")
             return
@@ -385,11 +431,19 @@ async def handle_incoming_message(message: Dict):
         await send_whatsapp_message(sender, "Please reply with 1, 2, 3, or 0.")
         return
 
-    if current_state == "RFQ_FLOW":
+    if current_state == ConversationState.RFQ_FLOW.value:
         selected = session.get("selected_item", {})
         product = session.get("product", {})
         quantity = session.get("quantity", 1)
         organization, delivery_location = _parse_facility_details(text)
+
+        if not validate_facility_name(organization) or not validate_delivery_location(delivery_location):
+            await send_whatsapp_message(
+                sender,
+                "Please reply with a valid facility/client name and delivery location.\n"
+                "Example: Mulago Hospital, Kampala",
+            )
+            return
 
         try:
             rfq_id, supplier_notified = await _create_whatsapp_rfq(
@@ -409,7 +463,7 @@ async def handle_incoming_message(message: Dict):
         except Exception as exc:
             log_audit_event(sender, "whatsapp_rfq_failed", {"error": str(exc)})
             await send_whatsapp_message(sender, "We could not submit your quotation request right now. Please try again shortly.")
-            save_session(sender, {"state": "MENU"})
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         supplier_text = "The supplier has been notified." if supplier_notified else "Our sales team will route it manually."
@@ -419,10 +473,10 @@ async def handle_incoming_message(message: Dict):
             f"{supplier_text}\n"
             "A follow-up will be shared with you shortly.",
         )
-        save_session(sender, {"state": "MENU"})
+        _transition_session(sender, current_state, ConversationState.MENU)
         return
 
-    if current_state == "DIRECT_RFQ":
+    if current_state == ConversationState.DIRECT_RFQ.value:
         parsed = _parse_direct_rfq(text)
         if not parsed:
             await send_whatsapp_message(
@@ -433,6 +487,12 @@ async def handle_incoming_message(message: Dict):
             return
 
         product_name, quantity, organization, delivery_location = parsed
+        if not validate_quantity(quantity) or not validate_facility_name(organization) or not validate_delivery_location(delivery_location):
+            await send_whatsapp_message(
+                sender,
+                "Please send a valid quantity, facility/client name, and delivery location.",
+            )
+            return
         try:
             rfq_id, _ = await _create_whatsapp_rfq(
                 sender=sender,
@@ -447,7 +507,7 @@ async def handle_incoming_message(message: Dict):
         except Exception as exc:
             log_audit_event(sender, "direct_whatsapp_rfq_failed", {"error": str(exc)})
             await send_whatsapp_message(sender, "We could not capture your quotation request right now. Please try again.")
-            save_session(sender, {"state": "MENU"})
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         await send_whatsapp_message(
@@ -455,23 +515,23 @@ async def handle_incoming_message(message: Dict):
             f"Your quotation request has been logged as RFQ #{rfq_id}.\n"
             "Our team will match it to suppliers and follow up with you.",
         )
-        save_session(sender, {"state": "MENU"})
+        _transition_session(sender, current_state, ConversationState.MENU)
         return
 
-    if current_state == "TALK_TO_AGENT":
+    if current_state == ConversationState.TALK_TO_AGENT.value:
         try:
             lead_id = await _capture_sales_lead(sender, text, "whatsapp_sales_handoff")
         except Exception as exc:
             log_audit_event(sender, "sales_lead_failed", {"error": str(exc)})
             await send_whatsapp_message(sender, "We could not hand this off to sales right now. Please try again shortly.")
-            save_session(sender, {"state": "MENU"})
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         await send_whatsapp_message(
             sender,
             f"Your request has been shared with our sales team. Lead #{lead_id} is now open and someone will reach out shortly.",
         )
-        save_session(sender, {"state": "MENU"})
+        _transition_session(sender, current_state, ConversationState.MENU)
         return
 
     await send_whatsapp_message(sender, "I did not understand that. Reply 0 for the main menu.")

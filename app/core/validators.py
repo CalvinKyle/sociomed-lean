@@ -1,43 +1,39 @@
 import re
 
-# Validate and sanitize WhatsApp messages
+from app.core.states import is_valid_state
+
+
+MESSAGE_TEXT_PATTERN = re.compile(r"^[\w\s.,?!/+():&%-]{1,1000}$")
+PHONE_PATTERN = re.compile(r"^\+\d{10,15}$")
+
 
 def validate_whatsapp_message(message):
-    """
-    Validates the content of a WhatsApp message.
-    Allows alphanumeric characters, spaces, and common punctuation.
-    """
-    return bool(re.match(r'^[\w .,?!]*(\s[\w .,?!]*)*$', message))
+    return isinstance(message, str) and bool(message.strip()) and len(message.strip()) <= 1000
 
-# Validate and sanitize product queries
 
 def validate_product_query(query):
-    """
-    Validates product query strings to be alphanumeric and spaces.
-    """
-    return bool(re.match(r'^[\w ]+$', query))
+    return isinstance(query, str) and len(query.strip()) >= 2 and bool(MESSAGE_TEXT_PATTERN.match(query.strip()))
 
-# Validate quantities
 
 def validate_quantity(quantity):
-    """
-    Validates that the quantity is a positive integer.
-    """
     return isinstance(quantity, int) and quantity > 0
 
-# Validate phone numbers
 
 def validate_phone_number(phone):
-    """
-    Validates phone numbers in international format.
-    Example: +1234567890 or 0123456789.
-    """
-    return bool(re.match(r'^(\+\d{1,3}[- ]?)?\d{10,15}$', phone))
+    return isinstance(phone, str) and bool(PHONE_PATTERN.match(phone.strip()))
 
-# Validate facility names
 
 def validate_facility_name(name):
-    """
-    Validates facility names to contain only alphanumeric characters and space.
-    """
-    return bool(re.match(r'^[\w ]+$', name))
+    return isinstance(name, str) and 2 <= len(name.strip()) <= 160
+
+
+def validate_delivery_location(location):
+    return isinstance(location, str) and 2 <= len(location.strip()) <= 200
+
+
+def validate_product_exists(product_id, products):
+    return any(product.get("product_id") == product_id for product in products)
+
+
+def validate_state(state):
+    return is_valid_state(state)

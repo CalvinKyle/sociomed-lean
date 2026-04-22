@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import VERIFY_TOKEN, WHATSAPP_APP_SECRET
 from app.core.utils import log_audit_event
+from app.data_access.catalog import get_categories
 from app.models.db import get_db
 from app.schemas.schemas import (
     BuyerLeadCreate,
     BuyerLeadResponse,
+    CatalogCategoriesResponse,
     CatalogSearchResponse,
     FeaturedCatalogResponse,
     RFQCreate,
@@ -63,6 +65,13 @@ async def featured_catalog(
     """Featured catalog offers in buyer's currency."""
     featured = get_featured_catalog(limit=limit, currency=currency)
     return FeaturedCatalogResponse(total_featured=len(featured), featured=featured)
+
+
+@router.get("/catalog/categories", response_model=CatalogCategoriesResponse, tags=["go-to-market"])
+async def catalog_categories():
+    categories = get_categories()
+    return CatalogCategoriesResponse(total_categories=len(categories), categories=categories)
+
 
 @router.get("/catalog/search", response_model=CatalogSearchResponse, tags=["go-to-market"])
 async def public_catalog_search(
