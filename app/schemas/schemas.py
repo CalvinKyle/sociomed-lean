@@ -8,6 +8,7 @@ class CatalogOffer(BaseModel):
     product_id: str
     product_name: str
     brand: str
+    uom: Optional[str] = None
     vendor_id: Optional[str] = None
     vendor_name: Optional[str] = None
     min_qty: int = 1

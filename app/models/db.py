@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import DATABASE_URL
@@ -25,6 +25,8 @@ class Vendor(Base):
     vendor_id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     phone = Column(String)
+    email = Column(String)
+    region = Column(String)
 
 class Inventory(Base):
     __tablename__ = "inventory"
@@ -32,6 +34,7 @@ class Inventory(Base):
     product_id = Column(String, ForeignKey("products.product_id"))
     vendor_id = Column(String, ForeignKey("vendors.vendor_id"))
     brand = Column(String)
+    uom = Column(String)
     stock_qty = Column(Integer, default=0)
     lead_time_days = Column(Integer)
 
@@ -87,6 +90,7 @@ class RFQRequest(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    ensure_runtime_columns()
 
 
 def get_db():
@@ -109,3 +113,23 @@ def load_data():
         }
     finally:
         db.close()
+
+
+def ensure_runtime_columns():
+    runtime_columns = {
+        "vendors": {"email": "VARCHAR", "region": "VARCHAR"},
+        "inventory": {"uom": "VARCHAR"},
+    }
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
+
+        for table_name, columns in runtime_columns.items():
+            if table_name not in existing_tables:
+                continue
+
+            existing_columns = {column["name"] for column in inspect(connection).get_columns(table_name)}
+            for column_name, column_type in columns.items():
+                if column_name not in existing_columns:
+                    connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))

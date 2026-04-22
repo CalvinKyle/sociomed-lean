@@ -7,6 +7,7 @@ def test_format_results_returns_selectable_offer_options():
             "inventory_id": "i1",
             "product_id": "p1",
             "brand": "SafeTouch",
+            "uom": "Box of 100",
             "stock_qty": 200,
             "lead_time_days": 3,
             "min_qty": 10,
@@ -25,5 +26,9 @@ def test_format_results_returns_selectable_offer_options():
 
     assert "Available Supplier Offers" in message
     assert "SafeTouch" in message
+    assert "UoM: Box of 100" in message
+    assert "UGX 1,100 - UGX 1,200" in message
+    assert "10-99 Box of 100: UGX 1,200" in message
     assert option_map[0]["vendor_name"] == "MedSource"
     assert option_map[0]["min_qty"] == 10
+    assert option_map[0]["uom"] == "Box of 100"

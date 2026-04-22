@@ -13,7 +13,7 @@ from app.services.procurement import (
     dispatch_lead_notification,
     dispatch_rfq_notifications,
 )
-from app.services.search import find_product, get_results
+from app.services.search import find_products, get_results
 from app.core.cache import get_cached_data
 
 
@@ -57,9 +57,10 @@ def _featured_offers_message(currency: str) -> str:
     for index, offer in enumerate(offers, start=1):
         starting_price = offer.get("starting_price")
         price_text = format_price(starting_price, currency) if starting_price is not None else "Price on request"
+        uom = offer.get("uom") or "unit"
         lines.append(
             f"{index}. {offer['product_name']} - {offer['brand']} from {offer.get('vendor_name', 'Supplier')}\n"
-            f"From {price_text} | Stock {offer.get('stock_qty', 0)} | Lead time {offer.get('lead_time_days', 'N/A')} days"
+            f"From {price_text} per {uom} | Stock {offer.get('stock_qty', 0)} | Lead time {offer.get('lead_time_days', 'N/A')} days"
         )
 
     lines.append("\nReply with the product name you want to search, or reply 3 to request a quotation.")
@@ -234,7 +235,21 @@ async def handle_incoming_message(message: Dict):
             return
 
         data = get_cached_data()
-        product = find_product(text, data.get("products", []), data.get("aliases", []))
+        product_matches = find_products(text, data.get("products", []), data.get("aliases", []), limit=5)
+        if len(product_matches) > 1:
+            product_list = "\n".join(
+                f"{index}. {product['name']}" for index, product in enumerate(product_matches, start=1)
+            )
+            await send_whatsapp_message(
+                sender,
+                "I found multiple products matching that term:\n"
+                f"{product_list}\n\n"
+                "Reply with the exact product name you want to price first, or reply 3 from the main menu for a bulk RFQ.",
+            )
+            save_session(sender, {"state": "SEARCHING"})
+            return
+
+        product = product_matches[0] if product_matches else None
         if not product:
             await send_whatsapp_message(
                 sender,
@@ -279,9 +294,10 @@ async def handle_incoming_message(message: Dict):
             await send_whatsapp_message(
                 sender,
                 f"You selected {selected['brand']} from {selected.get('vendor_name', 'Supplier')}.\n"
-                f"Minimum order: {selected.get('min_qty', 1)} units\n"
-                f"Stock: {selected.get('stock_qty', 0)} units\n\n"
-                "How many units do you need?",
+                f"UoM: {selected.get('uom', 'unit')}\n"
+                f"Minimum order: {selected.get('min_qty', 1)} {selected.get('uom', 'unit')}\n"
+                f"Stock: {selected.get('stock_qty', 0)} {selected.get('uom', 'unit')}\n\n"
+                f"How many {selected.get('uom', 'unit')} do you need?",
             )
             return
 
@@ -313,7 +329,7 @@ async def handle_incoming_message(message: Dict):
         )
         await send_whatsapp_message(
             sender,
-            f"Estimated starting price: {format_price(selected.get('default_price', 0), currency)} per unit.\n\n"
+            f"Estimated starting price: {format_price(selected.get('default_price', 0), currency)} per {selected.get('uom', 'unit')}.\n\n"
             "Reply with:\n"
             "1. Request quotation\n"
             "2. Talk to sales\n"
@@ -387,7 +403,7 @@ async def handle_incoming_message(message: Dict):
                 vendor_id=selected.get("vendor_id"),
                 vendor_name=selected.get("vendor_name"),
                 vendor_phone=selected.get("vendor_phone"),
-                notes=f"Selected brand: {selected.get('brand', 'Generic')}",
+                notes=f"Selected brand: {selected.get('brand', 'Generic')} | UoM: {selected.get('uom', 'unit')}",
                 currency=currency,
             )
         except Exception as exc:

@@ -49,6 +49,7 @@ uvicorn app.main:app --reload
 Open [http://localhost:8000/docs](http://localhost:8000/docs) to test the procurement endpoints.
 
 Production environment reference: [docs/ENVIRONMENTS.md](/Users/calvinainebyona/Desktop/sociomed-lean/docs/ENVIRONMENTS.md)
+Data blueprint reference: [docs/DATA_BLUEPRINT.md](/Users/calvinainebyona/Desktop/sociomed-lean/docs/DATA_BLUEPRINT.md)
 
 ## Environment Sections
 

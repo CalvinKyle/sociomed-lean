@@ -2,31 +2,41 @@
 
 from typing import Dict, List, Optional
 from rapidfuzz import process
-import logging
 
 from app.core.exchange_rates import convert_result_prices
 
-logger = logging.getLogger(__name__)
-
-def find_product(query: str, products: List[Dict], aliases: List[Dict]) -> Optional[Dict]:
-    """Find product by name or alias with fuzzy matching."""
+def find_products(query: str, products: List[Dict], aliases: List[Dict], limit: int = 5) -> List[Dict]:
+    """Find one or more products by alias or fuzzy product name."""
     query_clean = query.lower().strip()
-    
-    # Check aliases first (exact match preferred)
+
+    matches: List[Dict] = []
+    seen_product_ids = set()
+
     for a in aliases:
         if a["alias"].lower() in query_clean:
             match = next((p for p in products if p["product_id"] == a["product_id"]), None)
-            if match:
-                return match
-    
-    # Fuzzy match on product names
+            if match and match["product_id"] not in seen_product_ids:
+                matches.append(match)
+                seen_product_ids.add(match["product_id"])
+
     names = [p["name"] for p in products]
-    result = process.extractOne(query, names)
-    
-    if result and result[1] > 70:
-        return products[result[2]]
-    
-    return None
+    for _, score, index in process.extract(query, names, limit=max(limit * 2, 6)):
+        if score <= 70:
+            continue
+        product = products[index]
+        if product["product_id"] in seen_product_ids:
+            continue
+        matches.append(product)
+        seen_product_ids.add(product["product_id"])
+        if len(matches) >= limit:
+            break
+
+    return matches
+
+
+def find_product(query: str, products: List[Dict], aliases: List[Dict]) -> Optional[Dict]:
+    matches = find_products(query, products, aliases, limit=1)
+    return matches[0] if matches else None
 
 
 def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict]:
@@ -62,6 +72,7 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
             "inventory_id": inv.get("inventory_id"),
             "product_id": product_id,
             "brand": inv.get("brand", "Generic"),
+            "uom": inv.get("uom") or "unit",
             "stock_qty": inv.get("stock_qty", 0),
             "lead_time_days": inv.get("lead_time_days", "N/A"),
             "pricing": pricing_tiers,  # Still in base currency

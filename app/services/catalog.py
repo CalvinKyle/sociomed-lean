@@ -6,8 +6,7 @@ from rapidfuzz import process
 
 from app.core.cache import get_cached_data
 from app.core.config import DEFAULT_CURRENCY
-from app.core.exchange_rates import convert_price
-from app.services.search import find_product, get_results
+from app.services.search import find_products, get_results
 
 
 def _build_offer(product: Dict, result: Dict, currency: str = DEFAULT_CURRENCY) -> Dict:
@@ -21,6 +20,7 @@ def _build_offer(product: Dict, result: Dict, currency: str = DEFAULT_CURRENCY) 
         "product_id": product["product_id"],
         "product_name": product["name"],
         "brand": result.get("brand", "Generic"),
+        "uom": result.get("uom"),
         "vendor_id": result.get("vendor_id"),
         "vendor_name": result.get("vendor_name"),
         "min_qty": result.get("min_qty", 1),
@@ -48,10 +48,11 @@ def search_catalog(query: str, limit: int = 5, currency: str = DEFAULT_CURRENCY)
     matches: List[Dict] = []
     seen_product_ids = set()
 
-    exact_match = find_product(query, products, aliases)
-    if exact_match:
-        matches.append(exact_match)
-        seen_product_ids.add(exact_match["product_id"])
+    for matched_product in find_products(query, products, aliases, limit=limit):
+        if matched_product["product_id"] in seen_product_ids:
+            continue
+        matches.append(matched_product)
+        seen_product_ids.add(matched_product["product_id"])
 
     product_names = [product["name"] for product in products]
     for _, score, index in process.extract(query, product_names, limit=max(limit * 2, 6)):
