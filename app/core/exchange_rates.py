@@ -1,6 +1,9 @@
 # app/core/exchange_rates.py
 
+import json
 import logging
+import os
+from datetime import date, datetime
 from typing import Dict
 
 logger = logging.getLogger(__name__)
@@ -8,7 +11,7 @@ logger = logging.getLogger(__name__)
 # Base currency for all Google Sheets pricing
 BASE_CURRENCY = "UGX"
 
-# Daily exchange rates (update weekly, or fetch from API)
+# Daily exchange rates (update weekly, or set EXCHANGE_RATES_JSON without a code deploy)
 # Format: {target_currency: units_of_target_per_1_UGX}
 EXCHANGE_RATES: Dict[str, float] = {
     "UGX": 1.0,        # Uganda Shilling (base)
@@ -18,9 +21,28 @@ EXCHANGE_RATES: Dict[str, float] = {
     "CDF": 0.74,       # Congolese Franc (for future)
 }
 
-# Last updated: 2025-01-15
+EXCHANGE_RATES_LAST_UPDATED = os.getenv("EXCHANGE_RATES_LAST_UPDATED", "2025-01-15")
+MAX_EXCHANGE_RATE_AGE_DAYS = int(os.getenv("MAX_EXCHANGE_RATE_AGE_DAYS", "14"))
+
+if os.getenv("EXCHANGE_RATES_JSON"):
+    try:
+        EXCHANGE_RATES.update({key.upper(): float(value) for key, value in json.loads(os.getenv("EXCHANGE_RATES_JSON", "{}")).items()})
+        logger.info("Exchange rates loaded from EXCHANGE_RATES_JSON")
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        logger.error("Invalid EXCHANGE_RATES_JSON: %s", exc)
+
+# Last updated: set EXCHANGE_RATES_LAST_UPDATED=YYYY-MM-DD when overriding rates.
 # Source: Google Finance / XE.com
 # Update frequency: Weekly (matches your sync cadence)
+
+
+def exchange_rates_are_stale(as_of: date | None = None) -> bool:
+    try:
+        updated_at = datetime.strptime(EXCHANGE_RATES_LAST_UPDATED, "%Y-%m-%d").date()
+    except ValueError:
+        return True
+    today = as_of or date.today()
+    return (today - updated_at).days > MAX_EXCHANGE_RATE_AGE_DAYS
 
 
 def convert_price(amount_in_base: int, target_currency: str) -> int:

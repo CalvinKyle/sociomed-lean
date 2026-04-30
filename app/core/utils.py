@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
-from app.core.config import SESSION_TTL, WHATSAPP_TOKEN, PHONE_NUMBER_ID, build_redis_url
+from app.core.config import SESSION_TTL, SESSION_VERSION, WHATSAPP_TOKEN, PHONE_NUMBER_ID, build_redis_url
 from app.core.states import ConversationState, is_valid_state
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ async def send_whatsapp_message(to: str, message: str) -> bool:
 # ── REDIS-BACKED SESSIONS (replaces old in-memory dict) ──
 def save_session(user: str, data: Dict[str, Any]) -> None:
     key = f"session:{user}"
+    data["_session_version"] = SESSION_VERSION
     redis_client.setex(key, SESSION_TTL, json.dumps(data))
     logger.info(f"Session saved for {user} (Redis)")
 
@@ -92,7 +93,12 @@ def get_session(user: str) -> Optional[Dict[str, Any]]:
     key = f"session:{user}"
     data = redis_client.get(key)
     if data:
-        return json.loads(data)
+        session = json.loads(data)
+        if session.get("_session_version") != SESSION_VERSION:
+            redis_client.delete(key)
+            logger.info("Session version mismatch for %s - cleared stale session", user)
+            return None
+        return session
     return None
 
 def update_session(user: str, key: str, value: Any) -> None:

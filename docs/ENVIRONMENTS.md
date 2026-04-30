@@ -57,9 +57,21 @@ Use the same database and Redis instance for the web service and the Celery work
 | `DATABASE_URL` | `postgresql://sociomed:sociomed_dev_password@localhost:5432/sociomed_local` | Render Postgres internal connection string |
 | `REDIS_URL` | `redis://localhost:6379/0` | Render Redis internal connection string |
 | `SESSION_TTL` | `1800` | `1800` |
+| `SESSION_VERSION` | `1` | Increment only when old Redis sessions should be flushed |
 | `CACHE_TTL_SECONDS` | `300` | `300` |
+| `DB_POOL_SIZE` | `5` | Hosted Postgres pool size |
+| `DB_MAX_OVERFLOW` | `10` | Temporary extra DB connections |
+| `DB_POOL_RECYCLE_SECONDS` | `300` | Recycle stale DB connections |
 
 The app now preserves Redis credentials from `REDIS_URL`, which matters for managed Redis services.
+
+Exchange rates can be overridden without a deploy:
+
+| Variable | Example |
+| --- | --- |
+| `EXCHANGE_RATES_JSON` | `{"KES":0.029,"RWF":0.36}` |
+| `EXCHANGE_RATES_LAST_UPDATED` | `2026-04-30` |
+| `MAX_EXCHANGE_RATE_AGE_DAYS` | `14` |
 
 ## 5. Render Services
 
@@ -91,9 +103,10 @@ Use this pattern so your laptop, VS Code, and Codex stay in sync without copying
 2. Mirror those values into Render for both the web service and the worker.
 3. Deploy the API and worker.
 4. Run `alembic upgrade head`.
-5. Run `python3 sync_sheets_to_db.py` against production once the Google credentials are in place.
-6. Verify `/api/health`, `/api/catalog/featured`, `/api/catalog/search?q=gloves`, `POST /api/leads`, `POST /api/rfqs`, and the Meta webhook verification flow.
-7. Point Meta at `https://api.sociomed.co/api/webhook`.
+5. Run `python3 sync_sheets_to_db.py --dry-run` against production once the Google credentials are in place.
+6. Run `python3 sync_sheets_to_db.py` after the dry-run row counts look correct.
+7. Verify `/api/health`, `/api/catalog/featured`, `/api/catalog/search?q=gloves`, `POST /api/leads`, `POST /api/rfqs`, and the Meta webhook verification flow.
+8. Point Meta at `https://api.sociomed.co/api/webhook`.
 
 ## 8. Local Machine Bootstrap
 

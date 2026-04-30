@@ -1,15 +1,18 @@
 import hashlib
 import hmac
 import json
+import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import VERIFY_TOKEN, WHATSAPP_APP_SECRET
-from app.core.utils import log_audit_event
+from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, WHATSAPP_APP_SECRET
+from app.core.rate_limit import limiter
+from app.core.utils import log_audit_event, redis_client
 from app.data_access.catalog import get_categories
-from app.models.db import get_db
+from app.models.db import SessionLocal, get_db
 from app.schemas.schemas import (
     BuyerLeadCreate,
     BuyerLeadResponse,
@@ -50,11 +53,36 @@ def _verify_whatsapp_signature(body: bytes, signature: str | None) -> bool:
 
 @router.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "service": "sociomed-lean",
-        "audience": ["procurement-teams", "suppliers"],
-    }
+    checks = {"db": False, "redis": False, "sheets_credentials": False}
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        checks["db"] = True
+    except Exception as exc:
+        log_audit_event("system", "health_db_failed", {"error": str(exc)})
+    finally:
+        db.close()
+
+    try:
+        checks["redis"] = bool(redis_client.ping())
+    except Exception as exc:
+        log_audit_event("system", "health_redis_failed", {"error": str(exc)})
+
+    checks["sheets_credentials"] = bool(GOOGLE_CREDS_JSON) or (
+        bool(GOOGLE_CREDS_FILE) and os.path.exists(GOOGLE_CREDS_FILE)
+    )
+
+    status = "healthy" if all(checks.values()) else "degraded"
+    return JSONResponse(
+        status_code=200 if status == "healthy" else 503,
+        content={
+            "status": status,
+            "service": "sociomed-lean",
+            "audience": ["procurement-teams", "suppliers"],
+            "checks": checks,
+        },
+    )
 
 
 @router.get("/catalog/featured", response_model=FeaturedCatalogResponse, tags=["go-to-market"])
@@ -97,7 +125,8 @@ async def capture_buyer_lead(payload: BuyerLeadCreate, db: Session = Depends(get
 
 
 @router.post("/rfqs", response_model=RFQResponse, status_code=201, tags=["go-to-market"])
-async def create_public_rfq(payload: RFQCreate, db: Session = Depends(get_db)):
+@limiter.limit("20/minute")
+async def create_public_rfq(request: Request, payload: RFQCreate, db: Session = Depends(get_db)):
     rfq = create_rfq_request(db, payload)
     dispatch = await dispatch_rfq_notifications_detail(rfq, payload.vendor_phone)
     return RFQResponse(
@@ -122,12 +151,13 @@ async def verify_webhook(
 
 
 @router.post("/webhook")
+@limiter.limit("60/minute")
 async def whatsapp_webhook(
-    req: Request,
+    request: Request,
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
 ):
     try:
-        body_bytes = await req.body()
+        body_bytes = await request.body()
         if not _verify_whatsapp_signature(body_bytes, x_hub_signature_256):
             raise HTTPException(status_code=403, detail="invalid webhook signature")
 

@@ -5,6 +5,9 @@ credentials.json
 .secrets/
 __pycache__/
 *.pyc
+*.db
+*.sqlite
+*.sqlite3
 .pytest_cache/
 venv/
 .venv*/

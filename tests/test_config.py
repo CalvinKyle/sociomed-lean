@@ -22,7 +22,14 @@ def _reload_config(monkeypatch, **env):
         "REDIS_DB",
         "CACHE_TTL_SECONDS",
         "SESSION_TTL",
+        "SESSION_VERSION",
         "DEFAULT_CURRENCY",
+        "DB_POOL_SIZE",
+        "DB_MAX_OVERFLOW",
+        "DB_POOL_RECYCLE_SECONDS",
+        "EXCHANGE_RATES_JSON",
+        "EXCHANGE_RATES_LAST_UPDATED",
+        "MAX_EXCHANGE_RATE_AGE_DAYS",
         "PUBLIC_BASE_URL",
         "SUPPORT_EMAIL",
         "SALES_AGENT_PHONE",
@@ -85,4 +92,5 @@ def test_validate_config_requires_whatsapp_and_public_routing_in_production(monk
     assert "VERIFY_TOKEN" in message
     assert "WHATSAPP_TOKEN" in message
     assert "PHONE_NUMBER_ID" in message
+    assert "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE" in message
     assert "PUBLIC_BASE_URL" in message

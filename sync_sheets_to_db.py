@@ -13,6 +13,7 @@ Changes vs original:
 import sys
 import subprocess
 import logging
+import argparse
 
 sys.path.insert(0, ".")
 
@@ -71,18 +72,21 @@ def _upsert(db, model_cls, pk_field: str, rows: list[dict], field_map: dict) -> 
 
 # ─── main ─────────────────────────────────────────────────────────────────────
 
-def sync_sheets_to_db():
-    logger.info("Starting sync from Google Sheets → PostgreSQL …")
+def sync_sheets_to_db(dry_run: bool = False):
+    logger.info("Starting sync from Google Sheets → PostgreSQL%s …", " (dry run)" if dry_run else "")
 
     # 1. Run migrations first. Abort if they fail.
-    result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
-    if result.returncode != 0:
-        logger.error("Alembic migration failed:\n%s", result.stderr)
-        sys.exit(1)
-    logger.info("Migrations OK")
+    if dry_run:
+        logger.info("Dry run: skipping migrations and runtime schema changes")
+    else:
+        result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error("Alembic migration failed:\n%s", result.stderr)
+            sys.exit(1)
+        logger.info("Migrations OK")
 
-    # 2. Ensure tables exist (idempotent).
-    init_db()
+        # 2. Ensure tables exist (idempotent).
+        init_db()
 
     # 3. Pull from Sheets.
     try:
@@ -189,8 +193,12 @@ def sync_sheets_to_db():
         logger.info("Aliases: replaced with %d rows (%d stale removed)",
                     len(alias_rows), len(data["aliases"]) - len(alias_rows))
 
-        db.commit()
-        logger.info("✅ DB sync successful")
+        if dry_run:
+            db.rollback()
+            logger.info("Dry run complete: rolled back all staged inserts/updates/deletes")
+        else:
+            db.commit()
+            logger.info("✅ DB sync successful")
 
     except Exception as exc:
         db.rollback()
@@ -200,16 +208,22 @@ def sync_sheets_to_db():
         db.close()
 
     # 5. Clear Redis cache AFTER a successful sync.
-    try:
-        from app.core.cache import clear_cache
-        cleared = clear_cache()
-        if cleared:
-            logger.info("Redis cache cleared — next request will serve fresh data")
-    except Exception as exc:
-        logger.warning("Could not clear Redis cache (non-fatal): %s", exc)
+    if dry_run:
+        logger.info("Dry run: Redis cache not cleared")
+    else:
+        try:
+            from app.core.cache import clear_cache
+            cleared = clear_cache()
+            if cleared:
+                logger.info("Redis cache cleared — next request will serve fresh data")
+        except Exception as exc:
+            logger.warning("Could not clear Redis cache (non-fatal): %s", exc)
 
     logger.info("Sync complete.")
 
 
 if __name__ == "__main__":
-    sync_sheets_to_db()
+    parser = argparse.ArgumentParser(description="Sync SocioMed Google Sheets data into the database.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview inserts/updates/deletes and roll them back.")
+    args = parser.parse_args()
+    sync_sheets_to_db(dry_run=args.dry_run)
