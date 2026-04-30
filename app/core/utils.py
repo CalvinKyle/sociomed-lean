@@ -2,6 +2,7 @@ import requests
 import time
 import json
 import logging
+from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
@@ -13,23 +14,73 @@ logger = logging.getLogger(__name__)
 # Redis client for sessions + caching
 redis_client = redis.Redis.from_url(build_redis_url(), decode_responses=True)
 
+
+@dataclass(frozen=True)
+class WhatsAppSendResult:
+    recipient: str
+    success: bool
+    status_code: Optional[int] = None
+    provider_message_id: Optional[str] = None
+    error: Optional[str] = None
+    response_body: Optional[str] = None
+
+    def to_audit_data(self) -> Dict[str, Any]:
+        return {
+            "recipient": self.recipient,
+            "success": self.success,
+            "status_code": self.status_code,
+            "provider_message_id": self.provider_message_id,
+            "error": self.error,
+            "response_body": self.response_body[:500] if self.response_body else None,
+        }
+
+
+def _extract_whatsapp_message_id(response_body: str) -> Optional[str]:
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+
+    messages = payload.get("messages") or []
+    if not messages:
+        return None
+    return messages[0].get("id")
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
-async def send_whatsapp_message(to: str, message: str) -> bool:
-    # (same code as before — unchanged)
+async def send_whatsapp_message_result(to: str, message: str) -> WhatsAppSendResult:
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code == 200:
-            logger.info(f"Message sent to {to}")
-            return True
-        else:
-            logger.error(f"WhatsApp API error {res.status_code}: {res.text}")
-            return False
+            provider_message_id = _extract_whatsapp_message_id(res.text)
+            logger.info("whatsapp_message_sent recipient=%s provider_message_id=%s", to, provider_message_id)
+            return WhatsAppSendResult(
+                recipient=to,
+                success=True,
+                status_code=res.status_code,
+                provider_message_id=provider_message_id,
+                response_body=res.text,
+            )
+
+        logger.error("whatsapp_message_failed recipient=%s status=%s response=%s", to, res.status_code, res.text[:500])
+        return WhatsAppSendResult(
+            recipient=to,
+            success=False,
+            status_code=res.status_code,
+            error="whatsapp_api_error",
+            response_body=res.text,
+        )
     except Exception as e:
-        logger.error(f"Error sending to {to}: {e}")
+        logger.error("whatsapp_message_exception recipient=%s error=%s", to, e)
         raise
+
+
+async def send_whatsapp_message(to: str, message: str) -> bool:
+    result = await send_whatsapp_message_result(to, message)
+    return result.success
 
 # ── REDIS-BACKED SESSIONS (replaces old in-memory dict) ──
 def save_session(user: str, data: Dict[str, Any]) -> None:
@@ -67,10 +118,10 @@ async def notify_vendor(vendor_phone: str, message: str) -> bool:
     if not vendor_phone:
         logger.warning("Vendor phone missing - cannot notify vendor")
         return False
-    success = await send_whatsapp_message(vendor_phone, message)
-    if not success:
+    result = await send_whatsapp_message_result(vendor_phone, message)
+    if not result.success:
         logger.error(f"Failed to notify vendor {vendor_phone}")
-    return success
+    return result.success
 
 def log_audit_event(user_phone: str, event_type: str, data: Dict[str, Any]) -> None:
     # (same as before)

@@ -24,7 +24,7 @@ from app.services.procurement import (
     create_buyer_lead,
     create_rfq_request,
     dispatch_lead_notification,
-    dispatch_rfq_notifications,
+    dispatch_rfq_notifications_detail,
 )
 from app.services.tasks import process_whatsapp_message
 from app.services.whatsapp_service import (
@@ -99,11 +99,13 @@ async def capture_buyer_lead(payload: BuyerLeadCreate, db: Session = Depends(get
 @router.post("/rfqs", response_model=RFQResponse, status_code=201, tags=["go-to-market"])
 async def create_public_rfq(payload: RFQCreate, db: Session = Depends(get_db)):
     rfq = create_rfq_request(db, payload)
-    supplier_notified = await dispatch_rfq_notifications(rfq, payload.vendor_phone)
+    dispatch = await dispatch_rfq_notifications_detail(rfq, payload.vendor_phone)
     return RFQResponse(
         rfq_id=rfq.id,
         status=rfq.status,
-        supplier_notified=supplier_notified,
+        supplier_notified=dispatch.supplier_notified,
+        notification_status=dispatch.status,
+        notification_failure_reason=dispatch.failure_reason,
         created_at=rfq.created_at,
     )
 

@@ -80,4 +80,6 @@ class RFQResponse(BaseModel):
     rfq_id: int
     status: str
     supplier_notified: bool
+    notification_status: Optional[str] = None
+    notification_failure_reason: Optional[str] = None
     created_at: datetime
