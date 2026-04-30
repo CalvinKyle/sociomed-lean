@@ -75,6 +75,14 @@ Use `|` as the preferred separator for multi-value cells. The sync script also a
 
 For `related_ids`, order matters. Put the strongest recommendation first. Example: if a machine is most commonly bought with a specific reagent, list that reagent ID before secondary consumables.
 
+The `inventory` tab may also include this optional lowercase header:
+
+| Column | Purpose | Example |
+| --- | --- | --- |
+| `sku` | Internal inventory-level reference shared across vendor or brand rows for the same sellable item | `SM-GLOVE-NITRILE-M` |
+
+`sku` belongs on `inventory`, not `products`. The same internal SKU may appear across multiple inventory rows when different vendors or brands can satisfy the same internal reference. This lets SocioMed compare vendor offers while preserving one internal procurement reference.
+
 ## Alias Rules
 
 The `aliases` tab still maps search terms to products, but a single alias cell can now contain multiple values:
@@ -102,6 +110,7 @@ Catalog search now uses a weighted index:
 | `products.name` | Highest |
 | `products.clinical_speciality` | Medium-high |
 | `products.category` | Medium |
+| `inventory.sku` | Medium |
 
 The buyer does not see match explanations. The index is designed to help procurement heads get to relevant supplier offers quickly, not to explain search mechanics.
 

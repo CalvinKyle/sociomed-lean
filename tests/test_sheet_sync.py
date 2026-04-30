@@ -18,6 +18,7 @@ def test_prepare_sheet_data_normalizes_headers_and_vendor_phone():
                 "Inventory ID": "i1",
                 "Product ID": "p1",
                 "Vendor ID": "v1",
+                "SKU": " SM-GLOVE-001 ",
                 "Brand": "SafeTouch",
                 "UOM": "Box of 100",
                 "Stock Qty": "250",
@@ -35,6 +36,7 @@ def test_prepare_sheet_data_normalizes_headers_and_vendor_phone():
     assert prepared["products"][0]["clinical_speciality"] == "dentistry | surgery"
     assert prepared["products"][0]["related_ids"] == "p2 | p3"
     assert prepared["vendors"][0]["phone"] == "+256700111111"
+    assert prepared["inventory"][0]["sku"] == "SM-GLOVE-001"
     assert prepared["inventory"][0]["uom"] == "Box of 100"
 
 

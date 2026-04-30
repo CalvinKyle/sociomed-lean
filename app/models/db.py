@@ -33,6 +33,7 @@ class Vendor(Base):
 class Inventory(Base):
     __tablename__ = "inventory"
     inventory_id = Column(String, primary_key=True)
+    sku = Column(String)
     product_id = Column(String, ForeignKey("products.product_id"))
     vendor_id = Column(String, ForeignKey("vendors.vendor_id"))
     brand = Column(String)
@@ -121,7 +122,7 @@ def ensure_runtime_columns():
     runtime_columns = {
         "products": {"clinical_speciality": "VARCHAR", "related_ids": "TEXT"},
         "vendors": {"email": "VARCHAR", "region": "VARCHAR"},
-        "inventory": {"uom": "VARCHAR"},
+        "inventory": {"sku": "VARCHAR", "uom": "VARCHAR"},
     }
 
     with engine.begin() as connection:

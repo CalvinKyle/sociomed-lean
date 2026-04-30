@@ -18,13 +18,20 @@ def _score_field(query: str, value: str, weight: float) -> float:
     return fuzz.WRatio(query, value_clean) * weight
 
 
-def _build_search_documents(products: List[Dict], aliases: List[Dict]) -> list[dict]:
+def _build_search_documents(products: List[Dict], aliases: List[Dict], inventory: Optional[List[Dict]] = None) -> list[dict]:
     aliases_by_product = {}
     for alias in aliases:
         product_id = alias.get("product_id")
         alias_text = alias.get("alias")
         if product_id and alias_text:
             aliases_by_product.setdefault(product_id, []).append(alias_text)
+
+    skus_by_product = {}
+    for inventory_item in inventory or []:
+        product_id = inventory_item.get("product_id")
+        sku = inventory_item.get("sku")
+        if product_id and sku:
+            skus_by_product.setdefault(product_id, []).append(sku)
 
     documents = []
     for product in products:
@@ -37,6 +44,7 @@ def _build_search_documents(products: List[Dict], aliases: List[Dict]) -> list[d
                     {"name": "name", "weight": 1.15, "values": [product.get("name", "")]},
                     {"name": "clinical_speciality", "weight": 0.95, "values": split_multi_value_cell(product.get("clinical_speciality"))},
                     {"name": "category", "weight": 0.75, "values": [product.get("category", "")]},
+                    {"name": "sku", "weight": 0.8, "values": skus_by_product.get(product_id, [])},
                 ],
             }
         )
@@ -53,7 +61,11 @@ def find_products(
     """Find products through the weighted catalog index."""
     query_clean = query.lower().strip()
     products_by_id = {product["product_id"]: product for product in products}
-    search_documents = (data or {}).get("search_documents") or _build_search_documents(products, aliases)
+    search_documents = (data or {}).get("search_documents") or _build_search_documents(
+        products,
+        aliases,
+        (data or {}).get("inventory", []),
+    )
 
     scored_matches = []
     for document in search_documents:
@@ -114,6 +126,7 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
         
         result = {
             "inventory_id": inv.get("inventory_id"),
+            "sku": inv.get("sku"),
             "product_id": product_id,
             "brand": inv.get("brand", "Generic"),
             "uom": inv.get("uom") or "unit",

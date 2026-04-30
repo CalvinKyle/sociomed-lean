@@ -28,6 +28,7 @@ def _sample_data():
         "inventory": [
             {
                 "inventory_id": "i1",
+                "sku": "SM-GLOVE-001",
                 "product_id": "p1",
                 "vendor_id": "v1",
                 "brand": "SafeTouch",
@@ -37,6 +38,7 @@ def _sample_data():
             },
             {
                 "inventory_id": "i2",
+                "sku": "SM-OXY-001",
                 "product_id": "p2",
                 "vendor_id": "v2",
                 "brand": "AirFlow",
@@ -58,6 +60,7 @@ def _sample_data():
             "p1": [
                 {
                     "inventory_id": "i1",
+                    "sku": "SM-GLOVE-001",
                     "product_id": "p1",
                     "vendor_id": "v1",
                     "brand": "SafeTouch",
@@ -69,6 +72,7 @@ def _sample_data():
             "p2": [
                 {
                     "inventory_id": "i2",
+                    "sku": "SM-OXY-001",
                     "product_id": "p2",
                     "vendor_id": "v2",
                     "brand": "AirFlow",
@@ -106,6 +110,7 @@ def test_search_catalog_returns_live_offers(monkeypatch):
     assert matches[0]["vendor_name"] == "MedSource"
     assert matches[0]["starting_price"] == 1100
     assert matches[0]["uom"] == "Box of 100"
+    assert matches[0]["sku"] == "SM-GLOVE-001"
 
 
 def test_get_featured_catalog_returns_unique_products(monkeypatch):
@@ -135,6 +140,15 @@ def test_search_catalog_matches_clinical_speciality(monkeypatch):
     matches = catalog.search_catalog("dentistry", limit=5)
 
     assert matches[0]["product_name"] == "Surgical Gloves"
+
+
+def test_search_catalog_can_match_inventory_level_sku(monkeypatch):
+    monkeypatch.setattr(catalog, "get_cached_data", _sample_data)
+
+    matches = catalog.search_catalog("SM-GLOVE-001", limit=5)
+
+    assert matches[0]["product_name"] == "Surgical Gloves"
+    assert matches[0]["sku"] == "SM-GLOVE-001"
 
 
 def test_get_related_catalog_uses_related_ids_in_order(monkeypatch):

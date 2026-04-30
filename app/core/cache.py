@@ -30,6 +30,13 @@ def _build_search_documents(data: dict) -> list[dict]:
         if product_id and alias_text:
             aliases_by_product.setdefault(product_id, []).append(alias_text)
 
+    skus_by_product = {}
+    for inventory_item in data.get("inventory", []):
+        product_id = inventory_item.get("product_id")
+        sku = inventory_item.get("sku")
+        if product_id and sku:
+            skus_by_product.setdefault(product_id, []).append(sku)
+
     documents = []
     for product_id, product in products_by_id.items():
         documents.append(
@@ -40,6 +47,7 @@ def _build_search_documents(data: dict) -> list[dict]:
                     {"name": "name", "weight": 1.15, "values": [product.get("name", "")]},
                     {"name": "clinical_speciality", "weight": 0.95, "values": split_multi_value_cell(product.get("clinical_speciality"))},
                     {"name": "category", "weight": 0.75, "values": [product.get("category", "")]},
+                    {"name": "sku", "weight": 0.8, "values": skus_by_product.get(product_id, [])},
                 ],
             }
         )

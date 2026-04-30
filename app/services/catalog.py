@@ -18,6 +18,7 @@ def _build_offer(product: Dict, result: Dict, currency: str = DEFAULT_CURRENCY) 
         "product_id": product["product_id"],
         "product_name": product["name"],
         "brand": result.get("brand", "Generic"),
+        "sku": result.get("sku"),
         "uom": result.get("uom"),
         "vendor_id": result.get("vendor_id"),
         "vendor_name": result.get("vendor_name"),

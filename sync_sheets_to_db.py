@@ -148,6 +148,7 @@ def sync_sheets_to_db():
             if obj is None:
                 obj = Inventory(inventory_id=inv_id)
                 db.add(obj)
+            obj.sku = str(row.get("sku", "")).strip() or None
             obj.product_id = str(row.get("product_id", "")).strip() or None
             obj.vendor_id = str(row.get("vendor_id", "")).strip() or None
             obj.brand = str(row.get("brand", "")).strip() or None

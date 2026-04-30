@@ -32,8 +32,11 @@ def format_results(product_name, results, currency="UGX"):
         min_price = min(all_prices) if all_prices else item.get("default_price", 0)
         max_price = max(all_prices) if all_prices else item.get("default_price", 0)
         uom = item.get("uom") or "unit"
+        sku = item.get("sku")
 
         msg += f"*{counter}. {item['brand']}* from {item.get('vendor_name', 'Supplier')}\n"
+        if sku:
+            msg += f"SKU: {sku}\n"
         msg += f"UoM: {uom} | {format_price_range(min_price, max_price, currency)}\n"
         msg += f"Min qty: {item.get('min_qty', 1)} {uom} | Stock: {item.get('stock_qty', 0)} {uom} | Lead time: {item.get('lead_time_days', 'N/A')} days\n"
         msg += format_pricing_tiers(item["pricing"], currency, uom=uom) + "\n\n"
@@ -41,6 +44,7 @@ def format_results(product_name, results, currency="UGX"):
         option_map.append({
             "option": counter,
             "brand": item.get("brand", "Generic"),
+            "sku": sku,
             "uom": uom,
             "inventory_id": item.get("inventory_id"),
             "product_id": item.get("product_id"),

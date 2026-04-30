@@ -573,6 +573,7 @@ async def handle_incoming_message(message: Dict):
         options = session.get("options", [])
         if 1 <= option_num <= len(options):
             selected = options[option_num - 1]
+            sku_line = f"SKU: {selected.get('sku')}\n" if selected.get("sku") else ""
             _transition_session(
                 sender,
                 current_state,
@@ -584,6 +585,7 @@ async def handle_incoming_message(message: Dict):
             await send_whatsapp_message(
                 sender,
                 f"You selected {selected['brand']} from {selected.get('vendor_name', 'Supplier')}.\n"
+                f"{sku_line}"
                 f"UoM: {selected.get('uom', 'unit')}\n"
                 f"Minimum order: {selected.get('min_qty', 1)} {selected.get('uom', 'unit')}\n"
                 f"Stock: {selected.get('stock_qty', 0)} {selected.get('uom', 'unit')}\n\n"
@@ -704,7 +706,11 @@ async def handle_incoming_message(message: Dict):
                 vendor_id=selected.get("vendor_id"),
                 vendor_name=selected.get("vendor_name"),
                 vendor_phone=selected.get("vendor_phone"),
-                notes=f"Selected brand: {selected.get('brand', 'Generic')} | UoM: {selected.get('uom', 'unit')}",
+                notes=(
+                    f"Selected brand: {selected.get('brand', 'Generic')} | "
+                    f"SKU: {selected.get('sku') or 'N/A'} | "
+                    f"UoM: {selected.get('uom', 'unit')}"
+                ),
                 currency=currency,
             )
         except Exception as exc:
