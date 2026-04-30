@@ -4,8 +4,20 @@ from app.services import catalog
 def _sample_data():
     return {
         "products": [
-            {"product_id": "p1", "name": "Surgical Gloves", "category": "consumables"},
-            {"product_id": "p2", "name": "Oxygen Mask", "category": "devices"},
+            {
+                "product_id": "p1",
+                "name": "Surgical Gloves",
+                "category": "consumables",
+                "clinical_speciality": "dentistry | surgery",
+                "related_ids": "p2",
+            },
+            {
+                "product_id": "p2",
+                "name": "Oxygen Mask",
+                "category": "devices",
+                "clinical_speciality": "emergency",
+                "related_ids": "",
+            },
         ],
         "aliases": [
             {"alias": "gloves", "product_id": "p1"},
@@ -79,6 +91,8 @@ def _sample_data():
                 {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 5, "max_qty": None, "unit_price": 4500},
             ],
         },
+        "related_by_product": {"p1": ["p2"], "p2": []},
+        "reverse_related_by_product": {"p2": ["p1"]},
     }
 
 
@@ -113,3 +127,20 @@ def test_search_catalog_returns_multiple_products_for_shared_brand_alias(monkeyp
     product_names = {match["product_name"] for match in matches}
     assert "Surgical Gloves" in product_names
     assert "Oxygen Mask" in product_names
+
+
+def test_search_catalog_matches_clinical_speciality(monkeypatch):
+    monkeypatch.setattr(catalog, "get_cached_data", _sample_data)
+
+    matches = catalog.search_catalog("dentistry", limit=5)
+
+    assert matches[0]["product_name"] == "Surgical Gloves"
+
+
+def test_get_related_catalog_uses_related_ids_in_order(monkeypatch):
+    monkeypatch.setattr(catalog, "get_cached_data", _sample_data)
+
+    related = catalog.get_related_catalog("p1", limit=3)
+
+    assert len(related) == 1
+    assert related[0]["product_name"] == "Oxygen Mask"

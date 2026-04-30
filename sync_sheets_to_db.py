@@ -16,7 +16,7 @@ import logging
 
 sys.path.insert(0, ".")
 
-from app.core.sheet_sync import prepare_sheet_data, summarize_vendor_phone_issues
+from app.core.sheet_sync import prepare_sheet_data, split_multi_value_cell, summarize_vendor_phone_issues
 from app.integrations.sheets import load_data as load_from_sheets
 from app.models.db import (
     SessionLocal,
@@ -122,7 +122,12 @@ def sync_sheets_to_db():
         ins, upd = _upsert(
             db, Product, "product_id",
             data["products"],
-            {"name": "name", "category": "category"},
+            {
+                "name": "name",
+                "category": "category",
+                "clinical_speciality": "clinical_speciality",
+                "related_ids": "related_ids",
+            },
         )
         logger.info("Products: %d inserted, %d updated", ins, upd)
 
@@ -171,10 +176,11 @@ def sync_sheets_to_db():
         db.query(Alias).delete()
         alias_rows = [
             Alias(
-                alias=str(a.get("alias", "")).strip(),
+                alias=alias,
                 product_id=str(a.get("product_id", "")).strip(),
             )
             for a in data["aliases"]
+            for alias in split_multi_value_cell(a.get("alias", ""))
             if str(a.get("alias", "")).strip()
             and str(a.get("product_id", "")).strip() in valid_product_ids
         ]

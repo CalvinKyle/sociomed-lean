@@ -19,6 +19,8 @@ class Product(Base):
     product_id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     category = Column(String)
+    clinical_speciality = Column(String)
+    related_ids = Column(Text)
 
 class Vendor(Base):
     __tablename__ = "vendors"
@@ -117,6 +119,7 @@ def load_data():
 
 def ensure_runtime_columns():
     runtime_columns = {
+        "products": {"clinical_speciality": "VARCHAR", "related_ids": "TEXT"},
         "vendors": {"email": "VARCHAR", "region": "VARCHAR"},
         "inventory": {"uom": "VARCHAR"},
     }

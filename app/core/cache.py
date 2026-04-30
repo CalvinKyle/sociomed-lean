@@ -3,6 +3,7 @@ import redis
 from typing import Dict, Any
 import logging
 
+from app.core.sheet_sync import split_multi_value_cell
 from app.core.config import CACHE_TTL_SECONDS, build_redis_url
 from app.models.db import load_data   # This pulls the full dataset from PostgreSQL
 
@@ -18,8 +19,58 @@ redis_client = redis.Redis.from_url(
 )
 
 CACHE_KEY = "sociomed:full_data"   # All products, inventory, pricing, etc.
+
+
+def _build_search_documents(data: dict) -> list[dict]:
+    products_by_id = {product["product_id"]: product for product in data.get("products", [])}
+    aliases_by_product = {}
+    for alias in data.get("aliases", []):
+        product_id = alias.get("product_id")
+        alias_text = alias.get("alias")
+        if product_id and alias_text:
+            aliases_by_product.setdefault(product_id, []).append(alias_text)
+
+    documents = []
+    for product_id, product in products_by_id.items():
+        documents.append(
+            {
+                "product_id": product_id,
+                "fields": [
+                    {"name": "alias", "weight": 1.25, "values": aliases_by_product.get(product_id, [])},
+                    {"name": "name", "weight": 1.15, "values": [product.get("name", "")]},
+                    {"name": "clinical_speciality", "weight": 0.95, "values": split_multi_value_cell(product.get("clinical_speciality"))},
+                    {"name": "category", "weight": 0.75, "values": [product.get("category", "")]},
+                ],
+            }
+        )
+    return documents
+
+
+def _build_related_product_indexes(data: dict) -> None:
+    related_by_product = {}
+    reverse_related_by_product = {}
+
+    for product in data.get("products", []):
+        product_id = product.get("product_id")
+        if not product_id:
+            continue
+        related_ids = [
+            related_id
+            for related_id in split_multi_value_cell(product.get("related_ids"))
+            if related_id and related_id != product_id
+        ]
+        related_by_product[product_id] = related_ids
+        for related_id in related_ids:
+            reverse_related_by_product.setdefault(related_id, []).append(product_id)
+
+    data["related_by_product"] = related_by_product
+    data["reverse_related_by_product"] = reverse_related_by_product
+
+
 def build_indexes(data: dict) -> dict:
     """Pre-build lookup indexes to avoid O(n) loops on every search."""
+    data["products_by_id"] = {p["product_id"]: p for p in data.get("products", [])}
+
     data["inventory_by_product"] = {}
     for inv in data.get("inventory", []):
         pid = inv["product_id"]
@@ -31,6 +82,9 @@ def build_indexes(data: dict) -> dict:
     for pr in data.get("pricing", []):
         iid = pr["inventory_id"]
         data["pricing_by_inventory"].setdefault(iid, []).append(pr)
+
+    data["search_documents"] = _build_search_documents(data)
+    _build_related_product_indexes(data)
 
     return data
 

@@ -2,8 +2,6 @@
 
 from typing import Dict, List
 
-from rapidfuzz import process
-
 from app.core.cache import get_cached_data
 from app.core.config import DEFAULT_CURRENCY
 from app.services.search import find_products, get_results
@@ -48,21 +46,11 @@ def search_catalog(query: str, limit: int = 5, currency: str = DEFAULT_CURRENCY)
     matches: List[Dict] = []
     seen_product_ids = set()
 
-    for matched_product in find_products(query, products, aliases, limit=limit):
+    for matched_product in find_products(query, products, aliases, limit=limit, data=data):
         if matched_product["product_id"] in seen_product_ids:
             continue
         matches.append(matched_product)
         seen_product_ids.add(matched_product["product_id"])
-
-    product_names = [product["name"] for product in products]
-    for _, score, index in process.extract(query, product_names, limit=max(limit * 2, 6)):
-        if score < 55:
-            continue
-        product = products[index]
-        if product["product_id"] in seen_product_ids:
-            continue
-        matches.append(product)
-        seen_product_ids.add(product["product_id"])
 
     offers: List[Dict] = []
     for product in matches:
@@ -115,3 +103,36 @@ def get_featured_catalog(limit: int = 6, currency: str = DEFAULT_CURRENCY) -> Li
             break
 
     return featured
+
+
+def get_related_catalog(product_id: str, limit: int = 4, currency: str = DEFAULT_CURRENCY) -> List[Dict]:
+    """Return live offers for products linked through products.related_ids."""
+    data = get_cached_data()
+    products_by_id = data.get("products_by_id") or {product["product_id"]: product for product in data.get("products", [])}
+
+    related_ids = []
+    seen_ids = {product_id}
+    for candidate_id in data.get("related_by_product", {}).get(product_id, []):
+        if candidate_id not in seen_ids:
+            related_ids.append(candidate_id)
+            seen_ids.add(candidate_id)
+    for candidate_id in data.get("reverse_related_by_product", {}).get(product_id, []):
+        if candidate_id not in seen_ids:
+            related_ids.append(candidate_id)
+            seen_ids.add(candidate_id)
+
+    recommendations: List[Dict] = []
+    for related_id in related_ids:
+        product = products_by_id.get(related_id)
+        if not product:
+            continue
+
+        results = get_results(related_id, data, currency=currency)
+        if not results:
+            continue
+
+        recommendations.append(_build_offer(product, results[0], currency=currency))
+        if len(recommendations) >= limit:
+            break
+
+    return recommendations

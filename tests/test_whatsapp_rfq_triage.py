@@ -85,3 +85,48 @@ def test_bulk_direct_rfq_is_logged_for_manual_triage(monkeypatch):
     assert "Bulk RFQ items" in created_payload["notes"]
     assert "bulk quotation request has been logged" in sent_messages[-1]
     assert any(event == "bulk_rfq_triaged" for _, event, _ in audit_events)
+
+
+def test_related_product_selection_reuses_supplier_offer_flow(monkeypatch):
+    sender = "256700111111"
+    session_store = {
+        sender: {
+            "state": ConversationState.VIEWING_RESULTS.value,
+            "product": {"product_id": "p1", "name": "Dental Chair"},
+            "options": [{"brand": "ChairBrand"}],
+            "related_products": [{"product_id": "p2", "product_name": "Dental Bur"}],
+        }
+    }
+    sent_messages = []
+    data = {
+        "products": [{"product_id": "p2", "name": "Dental Bur"}],
+        "products_by_id": {"p2": {"product_id": "p2", "name": "Dental Bur"}},
+    }
+
+    async def fake_send_whatsapp_message(_to, message):
+        sent_messages.append(message)
+        return True
+
+    def fake_get_session(user):
+        return session_store.get(user)
+
+    def fake_save_session(user, data):
+        session_store[user] = data
+
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send_whatsapp_message)
+    monkeypatch.setattr(whatsapp_service, "get_session", fake_get_session)
+    monkeypatch.setattr(whatsapp_service, "save_session", fake_save_session)
+    monkeypatch.setattr(whatsapp_service, "get_cached_data", lambda: data)
+    monkeypatch.setattr(whatsapp_service, "get_results", lambda *_args, **_kwargs: [{"brand": "BurBrand"}])
+    monkeypatch.setattr(
+        whatsapp_service,
+        "format_results",
+        lambda product_name, _results, currency: (f"Available Supplier Offers for {product_name}", [{"brand": "BurBrand"}]),
+    )
+    monkeypatch.setattr(whatsapp_service, "get_related_catalog", lambda *_args, **_kwargs: [])
+
+    asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "R1"}}))
+
+    assert "Available Supplier Offers for Dental Bur" in sent_messages[-1]
+    assert session_store[sender]["state"] == ConversationState.VIEWING_RESULTS.value
+    assert session_store[sender]["product"]["product_id"] == "p2"

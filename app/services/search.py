@@ -1,37 +1,81 @@
 # app/services/search.py
 
 from typing import Dict, List, Optional
-from rapidfuzz import process
+from rapidfuzz import fuzz
 
 from app.core.exchange_rates import convert_result_prices
+from app.core.sheet_sync import split_multi_value_cell
 
-def find_products(query: str, products: List[Dict], aliases: List[Dict], limit: int = 5) -> List[Dict]:
-    """Find one or more products by alias or fuzzy product name."""
+
+def _score_field(query: str, value: str, weight: float) -> float:
+    value_clean = str(value or "").lower().strip()
+    if not value_clean:
+        return 0
+    if query == value_clean:
+        return 120 * weight
+    if query in value_clean or value_clean in query:
+        return 105 * weight
+    return fuzz.WRatio(query, value_clean) * weight
+
+
+def _build_search_documents(products: List[Dict], aliases: List[Dict]) -> list[dict]:
+    aliases_by_product = {}
+    for alias in aliases:
+        product_id = alias.get("product_id")
+        alias_text = alias.get("alias")
+        if product_id and alias_text:
+            aliases_by_product.setdefault(product_id, []).append(alias_text)
+
+    documents = []
+    for product in products:
+        product_id = product.get("product_id")
+        documents.append(
+            {
+                "product_id": product_id,
+                "fields": [
+                    {"name": "alias", "weight": 1.25, "values": aliases_by_product.get(product_id, [])},
+                    {"name": "name", "weight": 1.15, "values": [product.get("name", "")]},
+                    {"name": "clinical_speciality", "weight": 0.95, "values": split_multi_value_cell(product.get("clinical_speciality"))},
+                    {"name": "category", "weight": 0.75, "values": [product.get("category", "")]},
+                ],
+            }
+        )
+    return documents
+
+
+def find_products(
+    query: str,
+    products: List[Dict],
+    aliases: List[Dict],
+    limit: int = 5,
+    data: Optional[Dict] = None,
+) -> List[Dict]:
+    """Find products through the weighted catalog index."""
     query_clean = query.lower().strip()
+    products_by_id = {product["product_id"]: product for product in products}
+    search_documents = (data or {}).get("search_documents") or _build_search_documents(products, aliases)
 
-    matches: List[Dict] = []
-    seen_product_ids = set()
-
-    for a in aliases:
-        if a["alias"].lower() in query_clean:
-            match = next((p for p in products if p["product_id"] == a["product_id"]), None)
-            if match and match["product_id"] not in seen_product_ids:
-                matches.append(match)
-                seen_product_ids.add(match["product_id"])
-
-    names = [p["name"] for p in products]
-    for _, score, index in process.extract(query, names, limit=max(limit * 2, 6)):
-        if score <= 70:
+    scored_matches = []
+    for document in search_documents:
+        product_id = document.get("product_id")
+        product = products_by_id.get(product_id)
+        if not product:
             continue
-        product = products[index]
-        if product["product_id"] in seen_product_ids:
-            continue
-        matches.append(product)
-        seen_product_ids.add(product["product_id"])
-        if len(matches) >= limit:
-            break
 
-    return matches
+        best_score = 0
+        for field in document.get("fields", []):
+            field_score = max(
+                (_score_field(query_clean, value, field.get("weight", 1)) for value in field.get("values", [])),
+                default=0,
+            )
+            best_score = max(best_score, field_score)
+
+        if best_score >= 58:
+            scored_matches.append((best_score, product))
+
+    scored_matches.sort(key=lambda match: (-match[0], str(match[1].get("name", "")).lower()))
+
+    return [product for _, product in scored_matches[:limit]]
 
 
 def find_product(query: str, products: List[Dict], aliases: List[Dict]) -> Optional[Dict]:

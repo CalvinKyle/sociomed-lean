@@ -1,9 +1,17 @@
-from app.core.sheet_sync import prepare_sheet_data, summarize_vendor_phone_issues
+from app.core.sheet_sync import prepare_sheet_data, split_multi_value_cell, summarize_vendor_phone_issues
 
 
 def test_prepare_sheet_data_normalizes_headers_and_vendor_phone():
     raw_data = {
-        "products": [{" Product ID ": " p1 ", "Name": " Surgical Gloves ", "Category": " consumables "}],
+        "products": [
+            {
+                " Product ID ": " p1 ",
+                "Name": " Surgical Gloves ",
+                "Category": " consumables ",
+                "Clinical Speciality": " dentistry, surgery ",
+                "Related IDs": "p2; p3",
+            }
+        ],
         "vendors": [{"VendorID": "v1", "Name": "MedSource", "Phone": "256700111111", "Email": "sales@medsource.com ", "Region": "Kampala"}],
         "inventory": [
             {
@@ -24,8 +32,19 @@ def test_prepare_sheet_data_normalizes_headers_and_vendor_phone():
 
     assert prepared["products"][0]["product_id"] == "p1"
     assert prepared["products"][0]["name"] == "Surgical Gloves"
+    assert prepared["products"][0]["clinical_speciality"] == "dentistry | surgery"
+    assert prepared["products"][0]["related_ids"] == "p2 | p3"
     assert prepared["vendors"][0]["phone"] == "+256700111111"
     assert prepared["inventory"][0]["uom"] == "Box of 100"
+
+
+def test_split_multi_value_cell_accepts_commas_semicolons_and_pipes():
+    assert split_multi_value_cell("dentistry, surgery | emergency; ICU") == [
+        "dentistry",
+        "surgery",
+        "emergency",
+        "ICU",
+    ]
 
 
 def test_prepare_sheet_data_raises_for_missing_required_columns():

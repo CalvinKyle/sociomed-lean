@@ -17,7 +17,7 @@ from app.data_access.catalog import get_categories, get_products_by_category
 from app.models.db import SessionLocal
 from app.models.formatter import format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
-from app.services.catalog import get_featured_catalog
+from app.services.catalog import get_featured_catalog, get_related_catalog
 from app.services.procurement import (
     create_buyer_lead,
     create_rfq_request,
@@ -132,6 +132,24 @@ def _category_products_message(category_name: str, products: list[Dict], display
     lines.append("Reply with the product number you want to price first, or type the exact product name.")
     lines.append("Use 0 at any time to return to the main menu.")
     return "\n".join(lines)
+
+
+def _append_related_products(reply: str, product: Dict, currency: str) -> tuple[str, list[Dict]]:
+    try:
+        related_products = get_related_catalog(product.get("product_id", ""), limit=3, currency=currency)
+    except Exception as exc:
+        logger.warning("related_products_unavailable product_id=%s error=%s", product.get("product_id"), exc)
+        return reply, []
+    if not related_products:
+        return reply, []
+
+    lines = [reply, "", "Often sourced with this item:"]
+    for index, related in enumerate(related_products, start=1):
+        price = related.get("starting_price")
+        price_text = format_price(price, currency) if price is not None else "Price on request"
+        lines.append(f"R{index}. {related['product_name']} from {price_text} per {related.get('uom') or 'unit'}")
+    lines.append("Reply with R1, R2, or R3 to view that related item.")
+    return "\n".join(lines), related_products
 
 
 def _resolve_category_selection(text: str, categories: list[str]) -> Optional[str]:
@@ -360,7 +378,7 @@ async def handle_incoming_message(message: Dict):
             return
 
         data = get_cached_data()
-        product_matches = find_products(text, data.get("products", []), data.get("aliases", []), limit=5)
+        product_matches = find_products(text, data.get("products", []), data.get("aliases", []), limit=5, data=data)
         if len(product_matches) > 1:
             await send_whatsapp_message(sender, format_ambiguous_match_message(product_matches))
             _transition_session(
@@ -390,12 +408,14 @@ async def handle_incoming_message(message: Dict):
             return
 
         reply, option_map = format_results(product["name"], results, currency=currency)
+        reply, related_products = _append_related_products(reply, product, currency)
         _transition_session(
             sender,
             current_state,
             ConversationState.VIEWING_RESULTS,
             product=product,
             options=option_map,
+            related_products=related_products,
         )
         await send_whatsapp_message(sender, reply)
         return
@@ -439,12 +459,14 @@ async def handle_incoming_message(message: Dict):
             return
 
         reply, option_map = format_results(selected_product["name"], results, currency=currency)
+        reply, related_products = _append_related_products(reply, selected_product, currency)
         _transition_session(
             sender,
             current_state,
             ConversationState.VIEWING_RESULTS,
             product=selected_product,
             options=option_map,
+            related_products=related_products,
         )
         await send_whatsapp_message(sender, reply)
         return
@@ -493,17 +515,55 @@ async def handle_incoming_message(message: Dict):
             return
 
         reply, option_map = format_results(selected_product["name"], results, currency=currency)
+        reply, related_products = _append_related_products(reply, selected_product, currency)
         _transition_session(
             sender,
             current_state,
             ConversationState.VIEWING_RESULTS,
             product=selected_product,
             options=option_map,
+            related_products=related_products,
         )
         await send_whatsapp_message(sender, reply)
         return
 
     if current_state == ConversationState.VIEWING_RESULTS.value:
+        related_match = re.fullmatch(r"r(\d+)", text_clean)
+        if related_match:
+            related_products = session.get("related_products", [])
+            related_index = int(related_match.group(1)) - 1
+            if related_index < 0 or related_index >= len(related_products):
+                await send_whatsapp_message(sender, "That related item is not available. Reply with an offer number or 0 for menu.")
+                return
+
+            selected_related = related_products[related_index]
+            data = get_cached_data()
+            products_by_id = data.get("products_by_id") or {
+                product["product_id"]: product for product in data.get("products", [])
+            }
+            selected_product = products_by_id.get(selected_related.get("product_id"))
+            if not selected_product:
+                await send_whatsapp_message(sender, "That related item is no longer available. Reply 0 for the main menu.")
+                return
+
+            results = get_results(selected_product["product_id"], data, currency=currency)
+            if not results:
+                await send_whatsapp_message(sender, "We do not have a live offer for that related item right now.")
+                return
+
+            reply, option_map = format_results(selected_product["name"], results, currency=currency)
+            reply, next_related_products = _append_related_products(reply, selected_product, currency)
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.VIEWING_RESULTS,
+                product=selected_product,
+                options=option_map,
+                related_products=next_related_products,
+            )
+            await send_whatsapp_message(sender, reply)
+            return
+
         try:
             option_num = int(text_clean)
         except ValueError:
