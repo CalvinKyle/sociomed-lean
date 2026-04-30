@@ -62,6 +62,60 @@ Use these exact tabs and lowercase headers in Google Sheets:
 4. Use aliases aggressively
    Add abbreviations, common misspellings, and brand terms that buyers actually type.
 
+## Optional Product Columns Now Supported
+
+The `products` tab may also include these optional lowercase headers:
+
+| Column | Purpose | Example |
+| --- | --- | --- |
+| `clinical_speciality` | Helps specialty-led search such as dentistry, nephrology, surgery, ICU | `dentistry | surgery` |
+| `related_ids` | Ordered recommendation links to other product IDs | `P-REAGENT-1 | P-REAGENT-2` |
+
+Use `|` as the preferred separator for multi-value cells. The sync script also accepts commas and semicolons, then normalizes values to ` | ` internally.
+
+For `related_ids`, order matters. Put the strongest recommendation first. Example: if a machine is most commonly bought with a specific reagent, list that reagent ID before secondary consumables.
+
+## Alias Rules
+
+The `aliases` tab still maps search terms to products, but a single alias cell can now contain multiple values:
+
+| alias | product_id |
+| --- | --- |
+| `IV set | infusion set | giving set` | `P-IV-SET` |
+
+Use aliases for:
+
+- Common buyer terms
+- Abbreviations
+- Misspellings
+- Brand names only when you intentionally want that brand term to return the mapped product
+
+Brand search is intentionally not automatic from `inventory.brand` yet. If `Zelus` should return gloves and oxygen masks, add `Zelus` as an alias for those product IDs. This keeps brand discovery deliberate instead of letting one broad brand query return unrelated inventory.
+
+## Search Index Rules
+
+Catalog search now uses a weighted index:
+
+| Source | Weight |
+| --- | --- |
+| `aliases.alias` | Highest |
+| `products.name` | Highest |
+| `products.clinical_speciality` | Medium-high |
+| `products.category` | Medium |
+
+The buyer does not see match explanations. The index is designed to help procurement heads get to relevant supplier offers quickly, not to explain search mechanics.
+
+## Recommendation Rules
+
+Recommendations are driven by `products.related_ids`.
+
+- Direct links are shown first.
+- Reverse links are also supported, so if product A lists product B, product B can recommend product A.
+- WhatsApp related products appear as `R1`, `R2`, `R3`.
+- Selecting `R1` loads that related product into the same supplier-offer flow, preserving RFQ-first behavior.
+
+Different brands for the same item are already handled as supplier offers under the same `product_id`. In other words, one internal product can have multiple inventory rows from different vendors and brands, and the buyer compares them before submitting an RFQ.
+
 ## Clarifications That Are Compatible Without More Code
 
 Some of the co-founder advice is primarily about data quality and operating discipline, not backend changes:
@@ -81,8 +135,8 @@ These are strong product ideas, but they are not same-day launch blockers:
    The current WhatsApp flow routes multi-item requests into RFQ mode, but it does not yet build a full parsed multi-line cart.
 2. Short-form session cart with checkout branching
    Redis already stores the user session, but there is no dedicated cart model or `Checkout` flow yet. That is intentional while we remain RFQ-first.
-3. Equipment-to-consumables recommendations
-   The catalog does not yet model cross-sell relationships between equipment and consumables.
+3. Recommendation quality scoring
+   `related_ids` now supports linked-product recommendations, but there is not yet a performance-based scoring model using RFQ history or conversion data.
 4. PFI or PDF generation
    The repo does not yet generate supplier-facing PDFs.
 
@@ -93,7 +147,7 @@ These belong in the next product iteration after the data quality and vendor cov
 1. Fix the Google Sheet tabs and headers exactly.
 2. Populate at least 3 vendors with real `+256...` phone numbers.
 3. Add `uom` to every inventory row.
-4. Add alias coverage for abbreviations, misspellings, and brand terms.
+4. Add alias coverage for abbreviations, misspellings, and intentional brand terms.
 5. Re-run `python3 sync_sheets_to_db.py`.
-6. Verify `/api/catalog/search?q=gloves` and a WhatsApp search flow.
-7. Only then plan the multi-item cart and recommendation features.
+6. Add `clinical_speciality` and `related_ids` where relevant.
+7. Verify `/api/catalog/search?q=gloves`, `/api/catalog/search?q=dentistry`, and a WhatsApp search flow.
