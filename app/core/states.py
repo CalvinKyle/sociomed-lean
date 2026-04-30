@@ -4,6 +4,7 @@ from enum import Enum
 class ConversationState(str, Enum):
     MENU = "MENU"
     SEARCHING = "SEARCHING"
+    SEARCH_DISAMBIGUATION = "SEARCH_DISAMBIGUATION"
     BROWSING_CATEGORIES = "BROWSING_CATEGORIES"
     CATEGORY_SELECTED = "CATEGORY_SELECTED"
     VIEWING_RESULTS = "VIEWING_RESULTS"
@@ -18,6 +19,7 @@ class ConversationState(str, Enum):
 STATE_DESCRIPTIONS = {
     ConversationState.MENU.value: "buyer entry point",
     ConversationState.SEARCHING.value: "awaiting product search text",
+    ConversationState.SEARCH_DISAMBIGUATION.value: "awaiting product selection after ambiguous search",
     ConversationState.BROWSING_CATEGORIES.value: "awaiting category selection",
     ConversationState.CATEGORY_SELECTED.value: "awaiting product selection within a category",
     ConversationState.VIEWING_RESULTS.value: "showing supplier offers",

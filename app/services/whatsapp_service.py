@@ -24,6 +24,12 @@ from app.services.procurement import (
     dispatch_lead_notification,
     dispatch_rfq_notifications,
 )
+from app.services.rfq_triage import (
+    format_ambiguous_match_message,
+    is_bulk_request,
+    is_complex_bulk_request,
+    parse_direct_rfq_message,
+)
 from app.services.search import find_products, get_results
 from app.core.cache import get_cached_data
 
@@ -61,6 +67,16 @@ def _help_message() -> str:
         "4. Talk to sales for urgent or complex sourcing needs.\n"
         "6. Browse by category when you want to scan product families first.\n\n"
         "Use 0 at any time to return to the main menu."
+    )
+
+
+def _direct_rfq_prompt() -> str:
+    return (
+        "Reply with your RFQ in one message.\n\n"
+        "Single item:\n"
+        "surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
+        "Bulk list:\n"
+        "gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala"
     )
 
 
@@ -179,24 +195,6 @@ def _parse_facility_details(text: str) -> tuple[str, str]:
     return parts[0], ", ".join(parts[1:])
 
 
-def _parse_direct_rfq(text: str) -> Optional[tuple[str, int, str, str]]:
-    parts = _split_pipe_message(text)
-    if len(parts) < 4:
-        return None
-
-    product_name = parts[0]
-    quantity_text = parts[1]
-    facility = parts[2]
-    location = parts[3]
-
-    try:
-        quantity = int(quantity_text)
-    except ValueError:
-        return None
-
-    return product_name, quantity, facility, location
-
-
 def _log_user_input(sender: str, state: str, text: str) -> None:
     logger.info("whatsapp_input sender=%s state=%s text=%s", sender, state, text[:200])
 
@@ -311,11 +309,7 @@ async def handle_incoming_message(message: Dict):
             _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
         if text_clean == "3":
-            await send_whatsapp_message(
-                sender,
-                "Reply in one message using this format:\n"
-                "item(s) | quantity | facility/client name | delivery location",
-            )
+            await send_whatsapp_message(sender, _direct_rfq_prompt())
             _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
             return
         if text_clean == "4":
@@ -345,11 +339,15 @@ async def handle_incoming_message(message: Dict):
         return
 
     if current_state == ConversationState.SEARCHING.value:
-        if "," in text or " and " in text_clean or "+" in text_clean:
+        if is_bulk_request(text):
+            detail = (
+                "This looks like a multi-item sourcing list, so we should capture it as one RFQ for manual routing."
+            )
+            if is_complex_bulk_request(text):
+                detail = "This looks like a larger bulk sourcing list, so a SocioMed agent should triage it as one RFQ."
             await send_whatsapp_message(
                 sender,
-                "For multi-item procurement lists, use the quotation flow.\n"
-                "Reply with: item(s) | quantity | facility/client name | delivery location",
+                f"{detail}\n\n{_direct_rfq_prompt()}",
             )
             _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
             return
@@ -364,16 +362,13 @@ async def handle_incoming_message(message: Dict):
         data = get_cached_data()
         product_matches = find_products(text, data.get("products", []), data.get("aliases", []), limit=5)
         if len(product_matches) > 1:
-            product_list = "\n".join(
-                f"{index}. {product['name']}" for index, product in enumerate(product_matches, start=1)
-            )
-            await send_whatsapp_message(
+            await send_whatsapp_message(sender, format_ambiguous_match_message(product_matches))
+            _transition_session(
                 sender,
-                "I found multiple products matching that term:\n"
-                f"{product_list}\n\n"
-                "Reply with the exact product name you want to price first, or reply 3 from the main menu for a bulk RFQ.",
+                current_state,
+                ConversationState.SEARCH_DISAMBIGUATION,
+                search_matches=product_matches,
             )
-            _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
 
         product = product_matches[0] if product_matches else None
@@ -400,6 +395,55 @@ async def handle_incoming_message(message: Dict):
             current_state,
             ConversationState.VIEWING_RESULTS,
             product=product,
+            options=option_map,
+        )
+        await send_whatsapp_message(sender, reply)
+        return
+
+    if current_state == ConversationState.SEARCH_DISAMBIGUATION.value:
+        search_matches = session.get("search_matches", [])
+        if text_clean in {"rfq", "quote", "quotation"}:
+            await send_whatsapp_message(sender, _direct_rfq_prompt())
+            _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
+            return
+        if text_clean in {"agent", "sales", "help"}:
+            await send_whatsapp_message(
+                sender,
+                "Reply with: name | organization | what you need.\n"
+                "We will connect you with sales.",
+            )
+            _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
+            return
+
+        try:
+            selected_index = int(text_clean) - 1
+        except ValueError:
+            selected_index = -1
+
+        if selected_index < 0 or selected_index >= len(search_matches):
+            await send_whatsapp_message(
+                sender,
+                "Please reply with one of the product numbers shown, RFQ for a manual quotation, or AGENT for sales.",
+            )
+            return
+
+        selected_product = search_matches[selected_index]
+        data = get_cached_data()
+        results = get_results(selected_product["product_id"], data, currency=currency)
+        if not results:
+            await send_whatsapp_message(
+                sender,
+                "We do not have a live offer for that product right now.\n"
+                "Reply RFQ to request a manual quotation, or AGENT for a sourcing handoff.",
+            )
+            return
+
+        reply, option_map = format_results(selected_product["name"], results, currency=currency)
+        _transition_session(
+            sender,
+            current_state,
+            ConversationState.VIEWING_RESULTS,
+            product=selected_product,
             options=option_map,
         )
         await send_whatsapp_message(sender, reply)
@@ -620,17 +664,23 @@ async def handle_incoming_message(message: Dict):
         return
 
     if current_state == ConversationState.DIRECT_RFQ.value:
-        parsed = _parse_direct_rfq(text)
-        if not parsed:
+        rfq_payload = parse_direct_rfq_message(text)
+        if not rfq_payload:
             await send_whatsapp_message(
                 sender,
-                "Please use this format exactly:\n"
-                "item(s) | quantity | facility/client name | delivery location",
+                "Please use one of these formats:\n\n"
+                "Single item:\n"
+                "surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
+                "Bulk list:\n"
+                "gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala",
             )
             return
 
-        product_name, quantity, organization, delivery_location = parsed
-        if not validate_quantity(quantity) or not validate_facility_name(organization) or not validate_delivery_location(delivery_location):
+        if (
+            not validate_quantity(rfq_payload.quantity)
+            or not validate_facility_name(rfq_payload.organization)
+            or not validate_delivery_location(rfq_payload.delivery_location)
+        ):
             await send_whatsapp_message(
                 sender,
                 "Please send a valid quantity, facility/client name, and delivery location.",
@@ -639,17 +689,31 @@ async def handle_incoming_message(message: Dict):
         try:
             rfq_id, _ = await _create_whatsapp_rfq(
                 sender=sender,
-                product_name=product_name,
-                quantity=quantity,
-                organization=organization,
-                delivery_location=delivery_location,
-                source="whatsapp_direct_rfq",
-                notes="Generic RFQ from main menu",
+                product_name=rfq_payload.product_name,
+                quantity=rfq_payload.quantity,
+                organization=rfq_payload.organization,
+                delivery_location=rfq_payload.delivery_location,
+                source=rfq_payload.source,
+                notes=rfq_payload.notes,
                 currency=currency,
             )
         except Exception as exc:
             log_audit_event(sender, "direct_whatsapp_rfq_failed", {"error": str(exc)})
             await send_whatsapp_message(sender, "We could not capture your quotation request right now. Please try again.")
+            _transition_session(sender, current_state, ConversationState.MENU)
+            return
+
+        if rfq_payload.is_bulk:
+            log_audit_event(
+                sender,
+                "bulk_rfq_triaged",
+                {"rfq_id": rfq_id, "item_count": rfq_payload.item_count, "source": rfq_payload.source},
+            )
+            await send_whatsapp_message(
+                sender,
+                f"Your bulk quotation request has been logged as RFQ #{rfq_id}.\n"
+                "A SocioMed agent will triage the list, match suppliers, and follow up with options.",
+            )
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
