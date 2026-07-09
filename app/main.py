@@ -1,21 +1,21 @@
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
 
 from app.api.routes import router as api_router
+from app.core.auth import require_api_key
 from app.core.config import ENABLE_OPEN_DOCS, PUBLIC_BASE_URL, validate_config
 from app.core.logging_config import setup_logging
 from app.core.rate_limit import limiter
-from app.models.db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     setup_logging()
     validate_config()
-    init_db()
     print("🚀 SocioMed Lean procurement backend is now running!")
     yield
     # Optional: clean shutdown logic here later
@@ -39,7 +39,7 @@ app.add_middleware(SlowAPIMiddleware)
 # Include all routes
 app.include_router(api_router)
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(require_api_key)])
 async def root():
     return {
         "message": "SocioMed Lean procurement API",

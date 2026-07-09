@@ -28,9 +28,9 @@ Once deployed, these are the endpoints worth handing to your first design partne
 - `GET /api/catalog/search?q=surgical gloves`
   Use this for a procurement search box.
 - `POST /api/leads`
-  Capture buyer interest from a landing page or sales form.
+  Capture buyer interest from a landing page or sales form. Requires `X-API-Key`.
 - `POST /api/rfqs`
-  Submit quotation requests from a web form, sales ops tool, or onboarding workflow.
+  Submit quotation requests from a web form, sales ops tool, or onboarding workflow. Requires `X-API-Key`.
 - `POST /api/webhook`
   Receives incoming WhatsApp messages from Meta.
 
@@ -56,7 +56,7 @@ Data blueprint reference: [docs/DATA_BLUEPRINT.md](/Users/calvinainebyona/Deskto
 These are the concrete setup sections you need to address next:
 
 1. Shared identity and routing
-   Set `APP_ENV`, `PUBLIC_BASE_URL`, `SUPPORT_EMAIL`, `SALES_AGENT_PHONE`, `DEFAULT_CURRENCY`, `ENABLE_OPEN_DOCS`, and `LOG_LEVEL`.
+   Set `APP_ENV`, `PUBLIC_BASE_URL`, `SUPPORT_EMAIL`, `SALES_AGENT_PHONE`, `DEFAULT_CURRENCY`, `ENABLE_OPEN_DOCS`, `API_KEY`, and `LOG_LEVEL`.
 2. Meta WhatsApp Cloud API
    Set `VERIFY_TOKEN`, `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID`, and `WHATSAPP_APP_SECRET`.
 3. Google Sheets sync
@@ -102,9 +102,9 @@ Before outreach, make sure these are done:
 
 1. Load a high-confidence catalog into Sheets, then run `python3 sync_sheets_to_db.py`.
 2. Set `SALES_AGENT_PHONE` so every buyer request gets routed to a human.
-3. Deploy the API and verify `/api/health`, `/docs`, `/api/catalog/featured`, and `/api/catalog/search?q=gloves`.
+3. Deploy the API and verify authenticated `/api/health`, `/docs`, public `/api/catalog/featured`, and public `/api/catalog/search?q=gloves`.
 4. Connect the Meta webhook to `/api/webhook` and confirm verification succeeds with `hub.verify_token`.
-5. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at `/api/leads` and `/api/rfqs`.
+5. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at authenticated `/api/leads` and `/api/rfqs`.
 6. Use procurement-language messaging in outreach: faster supplier comparison, RFQ turnaround, stock visibility, and WhatsApp-native ordering.
 
 ## Async Processing
@@ -116,6 +116,6 @@ Webhook messages are offloaded to Celery for responsiveness.
 
 ## Notes
 
-- The app now initializes missing tables on startup via `init_db()`.
+- Schema changes are handled only by Alembic migrations; run `alembic upgrade head` before starting or syncing.
 - Redis can be configured with either `REDIS_URL` or `REDIS_HOST` plus `REDIS_PORT`.
 - Swagger docs can be disabled in production with `ENABLE_OPEN_DOCS=false`.

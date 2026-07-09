@@ -5,7 +5,7 @@ services:
     region: us-east
     plan: standard
     
-    healthCheckPath: /api/health
+    healthCheckPath: /api/catalog/categories
     healthCheckInterval: 30
     
     autoDeploy: false
@@ -33,6 +33,8 @@ services:
         value: https://api.sociomed.co
       - key: ENABLE_OPEN_DOCS
         value: "false"
+      - key: API_KEY
+        sync: false
       - key: GOOGLE_CREDS_FILE
         value: .secrets/google-service-account.json
       - key: GOOGLE_CREDS_JSON

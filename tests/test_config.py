@@ -34,6 +34,7 @@ def _reload_config(monkeypatch, **env):
         "SUPPORT_EMAIL",
         "SALES_AGENT_PHONE",
         "ENABLE_OPEN_DOCS",
+        "API_KEY",
     }
 
     for key in managed_keys:
@@ -83,6 +84,7 @@ def test_validate_config_requires_whatsapp_and_public_routing_in_production(monk
         WHATSAPP_APP_SECRET="",
         SALES_AGENT_PHONE="",
         PUBLIC_BASE_URL="",
+        API_KEY="",
     )
 
     with pytest.raises(Exception) as exc:
@@ -94,3 +96,4 @@ def test_validate_config_requires_whatsapp_and_public_routing_in_production(monk
     assert "PHONE_NUMBER_ID" in message
     assert "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE" in message
     assert "PUBLIC_BASE_URL" in message
+    assert "API_KEY" in message

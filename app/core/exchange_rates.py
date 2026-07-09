@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 # Base currency for all Google Sheets pricing
 BASE_CURRENCY = "UGX"
 
-# Daily exchange rates (update weekly, or set EXCHANGE_RATES_JSON without a code deploy)
+# Static fallback rates used only when EXCHANGE_RATES_JSON is not supplied.
+# Keep these conservative and set EXCHANGE_RATES_JSON plus EXCHANGE_RATES_LAST_UPDATED in deployed environments.
 # Format: {target_currency: units_of_target_per_1_UGX}
 EXCHANGE_RATES: Dict[str, float] = {
     "UGX": 1.0,        # Uganda Shilling (base)
@@ -26,7 +27,12 @@ MAX_EXCHANGE_RATE_AGE_DAYS = int(os.getenv("MAX_EXCHANGE_RATE_AGE_DAYS", "14"))
 
 if os.getenv("EXCHANGE_RATES_JSON"):
     try:
-        EXCHANGE_RATES.update({key.upper(): float(value) for key, value in json.loads(os.getenv("EXCHANGE_RATES_JSON", "{}")).items()})
+        EXCHANGE_RATES.update(
+            {
+                key.upper(): float(value)
+                for key, value in json.loads(os.getenv("EXCHANGE_RATES_JSON", "{}")).items()
+            }
+        )
         logger.info("Exchange rates loaded from EXCHANGE_RATES_JSON")
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         logger.error("Invalid EXCHANGE_RATES_JSON: %s", exc)
@@ -116,17 +122,3 @@ def convert_result_prices(result: Dict, target_currency: str) -> Dict:
         converted_result["default_price"] = convert_price(result["default_price"], target_currency)
     
     return converted_result
-
-
-# For manual exchange rate updates (weekly task):
-def update_exchange_rates(new_rates: Dict[str, float]) -> None:
-    """
-    Update exchange rates (call this weekly with fresh rates from XE.com).
-    In production, fetch from an API like exchangerate-api.com (free tier).
-    
-    Example:
-        >>> update_exchange_rates({"KES": 0.030, "SSP": 0.35})
-    """
-    global EXCHANGE_RATES
-    EXCHANGE_RATES.update(new_rates)
-    logger.info(f"Exchange rates updated: {new_rates}")

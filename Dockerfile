@@ -23,7 +23,7 @@ ENV PORT=10000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/api/health', timeout=5)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/api/catalog/categories', timeout=5)"
 
 # Start application
 CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "app.main:app", "--bind", "0.0.0.0:10000"]

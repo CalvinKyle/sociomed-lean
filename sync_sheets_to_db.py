@@ -26,7 +26,6 @@ from app.models.db import (
     Inventory,
     Pricing,
     Alias,
-    init_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,7 @@ def sync_sheets_to_db(dry_run: bool = False):
 
     # 1. Run migrations first. Abort if they fail.
     if dry_run:
-        logger.info("Dry run: skipping migrations and runtime schema changes")
+        logger.info("Dry run: skipping migrations")
     else:
         result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
         if result.returncode != 0:
@@ -85,10 +84,7 @@ def sync_sheets_to_db(dry_run: bool = False):
             sys.exit(1)
         logger.info("Migrations OK")
 
-        # 2. Ensure tables exist (idempotent).
-        init_db()
-
-    # 3. Pull from Sheets.
+    # 2. Pull from Sheets.
     try:
         raw = load_from_sheets()
     except Exception as exc:
@@ -119,7 +115,7 @@ def sync_sheets_to_db(dry_run: bool = False):
             "WhatsApp RFQ routing will silently fail."
         )
 
-    # 4. Upsert everything in one transaction.
+    # 3. Upsert everything in one transaction.
     db = SessionLocal()
     try:
         # ── products ──
@@ -207,7 +203,7 @@ def sync_sheets_to_db(dry_run: bool = False):
     finally:
         db.close()
 
-    # 5. Clear Redis cache AFTER a successful sync.
+    # 4. Clear Redis cache AFTER a successful sync.
     if dry_run:
         logger.info("Dry run: Redis cache not cleared")
     else:

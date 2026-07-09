@@ -44,6 +44,45 @@ def extract_message(body: Dict) -> Optional[Dict]:
         return None
 
 
+def _extract_text_body(message: Dict) -> Optional[str]:
+    if message.get("type") not in {None, "text"}:
+        return None
+
+    text = message.get("text")
+    if not isinstance(text, dict):
+        return None
+
+    body = text.get("body")
+    if not isinstance(body, str):
+        return None
+
+    return body.strip()
+
+
+def _unsupported_message_type(message: Dict) -> str:
+    message_type = message.get("type") or "message"
+    labels = {
+        "audio": "voice note",
+        "button": "button reply",
+        "document": "document",
+        "image": "photo",
+        "interactive": "interactive message",
+        "location": "location",
+        "sticker": "sticker",
+        "video": "video",
+        "voice": "voice note",
+    }
+    return labels.get(message_type, str(message_type).replace("_", " "))
+
+
+def _unsupported_message_reply(message: Dict) -> str:
+    message_type = _unsupported_message_type(message)
+    return (
+        f"I received your {message_type}, but this procurement flow works best with typed text right now.\n\n"
+        "Please type your reply as text so I can keep helping you. You can also send 0 to return to the main menu."
+    )
+
+
 def _main_menu() -> str:
     return (
         "Welcome to SocioMed.\n\n"
@@ -288,8 +327,21 @@ async def _capture_sales_lead(sender: str, text: str, source: str) -> int:
 
 async def handle_incoming_message(message: Dict):
     """Production-ready WhatsApp procurement flow."""
-    text = message["text"]["body"].strip()
-    sender = message["from"]
+    sender = message.get("from")
+    if not sender:
+        log_audit_event("unknown", "whatsapp_missing_sender", {"message": message})
+        return
+
+    text = _extract_text_body(message)
+    if text is None:
+        log_audit_event(
+            sender,
+            "unsupported_whatsapp_message",
+            {"message_type": message.get("type", "unknown")},
+        )
+        await send_whatsapp_message(sender, _unsupported_message_reply(message))
+        return
+
     text_clean = text.lower()
     currency = get_currency_for_phone(sender)
 

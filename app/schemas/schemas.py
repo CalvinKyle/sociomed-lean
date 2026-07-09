@@ -84,3 +84,14 @@ class RFQResponse(BaseModel):
     notification_status: Optional[str] = None
     notification_failure_reason: Optional[str] = None
     created_at: datetime
+
+
+class RFQStatusUpdate(BaseModel):
+    status: str = Field(min_length=2, max_length=50, pattern=r"^[A-Za-z][A-Za-z0-9_ -]*$")
+
+
+class RFQStatusResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    rfq_id: int
+    status: str

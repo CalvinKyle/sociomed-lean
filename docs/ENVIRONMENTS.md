@@ -17,6 +17,7 @@ Set these in every environment:
 | `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 ops number | This is where buyer leads and RFQs are forwarded. |
 | `DEFAULT_CURRENCY` | `UGX` | `UGX` | Buyer phone prefixes still override this where supported. |
 | `ENABLE_OPEN_DOCS` | `true` | `false` | Keep docs off in production. |
+| `API_KEY` | `sociomed-local-api-key` | Strong random secret | Required for `/`, `/api/health`, leads, RFQs, and RFQ status updates. Public catalog and Meta webhook endpoints do not require it. |
 | `LOG_LEVEL` | `INFO` | `INFO` | Raise to `DEBUG` only when actively troubleshooting. |
 
 ## 2. Meta WhatsApp Cloud API
@@ -73,6 +74,8 @@ Exchange rates can be overridden without a deploy:
 | `EXCHANGE_RATES_LAST_UPDATED` | `2026-04-30` |
 | `MAX_EXCHANGE_RATE_AGE_DAYS` | `14` |
 
+If `EXCHANGE_RATES_JSON` is not set, the app uses conservative static fallback rates from code and treats freshness based on `EXCHANGE_RATES_LAST_UPDATED`.
+
 ## 5. Render Services
 
 You need three services:
@@ -105,7 +108,7 @@ Use this pattern so your laptop, VS Code, and Codex stay in sync without copying
 4. Run `alembic upgrade head`.
 5. Run `python3 sync_sheets_to_db.py --dry-run` against production once the Google credentials are in place.
 6. Run `python3 sync_sheets_to_db.py` after the dry-run row counts look correct.
-7. Verify `/api/health`, `/api/catalog/featured`, `/api/catalog/search?q=gloves`, `POST /api/leads`, `POST /api/rfqs`, and the Meta webhook verification flow.
+7. Verify `/api/health` with `X-API-Key`, public `/api/catalog/featured`, public `/api/catalog/search?q=gloves`, authenticated `POST /api/leads`, authenticated `POST /api/rfqs`, and the Meta webhook verification flow.
 8. Point Meta at `https://api.sociomed.co/api/webhook`.
 
 ## 8. Local Machine Bootstrap

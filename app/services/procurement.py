@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -99,8 +100,12 @@ def create_rfq_request(db: Session, payload: RFQCreate) -> RFQRequest:
     return rfq
 
 
+def _normalize_rfq_status(status: str) -> str:
+    return re.sub(r"[\s-]+", "_", status.strip().lower())
+
+
 def mark_rfq_status(db: Session, rfq_id: int, status: str) -> RFQRequest | None:
-    rfq = update_rfq_status(db, rfq_id, status)
+    rfq = update_rfq_status(db, rfq_id, _normalize_rfq_status(status))
     if rfq:
         log_audit_event(rfq.phone, "rfq_status_updated", {"rfq_id": rfq.id, "status": rfq.status})
     return rfq

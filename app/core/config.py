@@ -41,6 +41,7 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "sales@sociomed.co")
 SALES_AGENT_PHONE = os.getenv("SALES_AGENT_PHONE")
 ENABLE_OPEN_DOCS = os.getenv("ENABLE_OPEN_DOCS", "true").lower() == "true"
+API_KEY = os.getenv("API_KEY")
 
 # DB pool settings for hosted PostgreSQL. SQLite ignores these.
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
@@ -73,6 +74,7 @@ def validate_config():
                 "SHEET_NAME": SHEET_NAME,
                 "SALES_AGENT_PHONE": SALES_AGENT_PHONE,
                 "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
+                "API_KEY": API_KEY,
             }
         )
     for key, value in required.items():
