@@ -9,4 +9,4 @@
 - Removed dead code and startup schema mutation in favor of Alembic-only migrations.
 - Added an initial Alembic schema migration for existing models.
 - Updated dependency pins and corrected the Redis client pin to remain compatible with Celery's Redis transport.
-- Verified public domain references use `sociomed.co` and documented static exchange-rate fallback behavior.
+- Verified public domain references use `socio-med.com` and documented static exchange-rate fallback behavior.
