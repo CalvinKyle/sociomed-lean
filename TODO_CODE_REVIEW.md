@@ -15,5 +15,5 @@
 - DONE: Remove dead code, including the unused Redis session manager and exchange-rate updater.
 - DONE: Standardize schema changes on Alembic migrations and remove runtime schema mutation.
 - DONE: Update stale dependencies while keeping the dependency graph installable.
-- DONE: Verify domain references use `sociomed.co`.
+- DONE: Verify domain references use `socio-med.com`.
 - DONE: Clarify static exchange-rate fallback behavior.

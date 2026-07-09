@@ -38,7 +38,7 @@ SESSION_TTL = int(os.getenv("SESSION_TTL", 1800))
 SESSION_VERSION = int(os.getenv("SESSION_VERSION", "1"))
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "UGX")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
-SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "sales@sociomed.co")
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "sales@socio-med.com")
 SALES_AGENT_PHONE = os.getenv("SALES_AGENT_PHONE")
 ENABLE_OPEN_DOCS = os.getenv("ENABLE_OPEN_DOCS", "true").lower() == "true"
 API_KEY = os.getenv("API_KEY")

@@ -28,9 +28,9 @@ services:
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
-        value: sales@sociomed.co
+        value: sales@socio-med.com
       - key: PUBLIC_BASE_URL
-        value: https://api.sociomed.co
+        value: https://api.socio-med.com
       - key: ENABLE_OPEN_DOCS
         value: "false"
       - key: API_KEY
@@ -86,9 +86,9 @@ services:
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
-        value: sales@sociomed.co
+        value: sales@socio-med.com
       - key: PUBLIC_BASE_URL
-        value: https://api.sociomed.co
+        value: https://api.socio-med.com
       - key: DEFAULT_CURRENCY
         value: UGX
       - key: DATABASE_URL

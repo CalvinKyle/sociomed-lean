@@ -12,8 +12,8 @@ Set these in every environment:
 | Variable | Local value | Production value | Notes |
 | --- | --- | --- | --- |
 | `APP_ENV` | `development` | `production` | Production turns on stricter startup validation. |
-| `PUBLIC_BASE_URL` | `http://localhost:8000` | `https://api.sociomed.co` | Use your Render URL first if the custom domain is not live yet. |
-| `SUPPORT_EMAIL` | `sales@sociomed.co` | `sales@sociomed.co` | Buyer-facing contact. |
+| `PUBLIC_BASE_URL` | `http://localhost:8000` | `https://api.socio-med.com` | Use your Render URL first if the custom domain is not live yet. |
+| `SUPPORT_EMAIL` | `sales@socio-med.com` | `sales@socio-med.com` | Buyer-facing contact. |
 | `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 ops number | This is where buyer leads and RFQs are forwarded. |
 | `DEFAULT_CURRENCY` | `UGX` | `UGX` | Buyer phone prefixes still override this where supported. |
 | `ENABLE_OPEN_DOCS` | `true` | `false` | Keep docs off in production. |
@@ -31,7 +31,7 @@ These power `/api/webhook` and all outbound WhatsApp notifications:
 | `PHONE_NUMBER_ID` | Paste the Meta WhatsApp phone number ID |
 | `WHATSAPP_APP_SECRET` | Paste the Meta app secret used for webhook signature validation |
 
-The webhook URL should be `https://api.sociomed.co/api/webhook` once production is live.
+The webhook URL should be `https://api.socio-med.com/api/webhook` once production is live.
 
 ## 3. Google Sheets Sync
 
@@ -109,7 +109,7 @@ Use this pattern so your laptop, VS Code, and Codex stay in sync without copying
 5. Run `python3 sync_sheets_to_db.py --dry-run` against production once the Google credentials are in place.
 6. Run `python3 sync_sheets_to_db.py` after the dry-run row counts look correct.
 7. Verify `/api/health` with `X-API-Key`, public `/api/catalog/featured`, public `/api/catalog/search?q=gloves`, authenticated `POST /api/leads`, authenticated `POST /api/rfqs`, and the Meta webhook verification flow.
-8. Point Meta at `https://api.sociomed.co/api/webhook`.
+8. Point Meta at `https://api.socio-med.com/api/webhook`.
 
 ## 8. Local Machine Bootstrap
 
