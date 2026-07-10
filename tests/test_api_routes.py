@@ -26,6 +26,15 @@ def test_catalog_browse_is_public(monkeypatch):
     assert response.json() == {"total_categories": 1, "categories": ["consumables"]}
 
 
+def test_liveness_is_public_and_returns_process_status(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/health/liveness")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_meta_webhook_verification_is_public(monkeypatch):
     client = _client(monkeypatch)
     monkeypatch.setattr(routes, "VERIFY_TOKEN", "verify-me")

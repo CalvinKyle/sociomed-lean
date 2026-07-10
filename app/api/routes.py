@@ -55,6 +55,11 @@ def _verify_whatsapp_signature(body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(signature.split("=", 1)[1], expected)
 
 
+@router.get("/health/liveness")
+async def liveness_check():
+    return {"status": "ok"}
+
+
 @router.get("/health", dependencies=[Depends(require_api_key)])
 async def health_check():
     checks = {"db": False, "redis": False, "sheets_credentials": False}

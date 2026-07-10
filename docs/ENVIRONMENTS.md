@@ -17,7 +17,7 @@ Set these in every environment:
 | `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 ops number | This is where buyer leads and RFQs are forwarded. |
 | `DEFAULT_CURRENCY` | `UGX` | `UGX` | Buyer phone prefixes still override this where supported. |
 | `ENABLE_OPEN_DOCS` | `true` | `false` | Keep docs off in production. |
-| `API_KEY` | `sociomed-local-api-key` | Strong random secret | Required for `/`, `/api/health`, leads, RFQs, and RFQ status updates. Public catalog and Meta webhook endpoints do not require it. |
+| `API_KEY` | `sociomed-local-api-key` | Strong random secret | Required for `/`, detailed `/api/health`, leads, RFQs, and RFQ status updates. The liveness check, public catalog, and Meta webhook endpoints do not require it. |
 | `LOG_LEVEL` | `INFO` | `INFO` | Raise to `DEBUG` only when actively troubleshooting. |
 
 ## 2. Meta WhatsApp Cloud API
@@ -66,6 +66,11 @@ Use the same database and Redis instance for the web service and the Celery work
 
 The app now preserves Redis credentials from `REDIS_URL`, which matters for managed Redis services.
 
+Health checks serve two distinct purposes:
+
+- `GET /api/health/liveness` is unauthenticated and returns only `{"status": "ok"}`. Render and Docker use it to determine whether the API process is up.
+- `GET /api/health` requires `X-API-Key` and reports detailed database, Redis, and Google Sheets credential checks for human and operations use.
+
 Exchange rates can be overridden without a deploy:
 
 | Variable | Example |
@@ -88,7 +93,7 @@ Important production rule:
 
 - The worker must receive the same WhatsApp, Postgres, Redis, and sales-routing variables as the web service.
 
-That mismatch was a deploy blocker before this update; it is now reflected in [render.yaml](/Users/calvinainebyona/Desktop/sociomed-lean/render.yaml).
+That mismatch was a deploy blocker before this update; it is now reflected in [render.yaml](../render.yaml).
 
 ## 6. Cross-Device Workflow
 
@@ -102,18 +107,18 @@ Use this pattern so your laptop, VS Code, and Codex stay in sync without copying
 
 ## 7. Fastest Production Sequence
 
-1. Fill in [.env.production.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.production.example) with the real production values.
+1. Fill in [.env.production.example](../.env.production.example) with the real production values.
 2. Mirror those values into Render for both the web service and the worker.
 3. Deploy the API and worker.
 4. Run `alembic upgrade head`.
 5. Run `python3 sync_sheets_to_db.py --dry-run` against production once the Google credentials are in place.
 6. Run `python3 sync_sheets_to_db.py` after the dry-run row counts look correct.
-7. Verify `/api/health` with `X-API-Key`, public `/api/catalog/featured`, public `/api/catalog/search?q=gloves`, authenticated `POST /api/leads`, authenticated `POST /api/rfqs`, and the Meta webhook verification flow.
+7. Verify public `/api/health/liveness`, detailed `/api/health` with `X-API-Key`, public `/api/catalog/featured`, public `/api/catalog/search?q=gloves`, authenticated `POST /api/leads`, authenticated `POST /api/rfqs`, and the Meta webhook verification flow.
 8. Point Meta at `https://api.socio-med.com/api/webhook`.
 
 ## 8. Local Machine Bootstrap
 
-1. Copy [.env.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.example) to `.env.local`.
+1. Copy [.env.example](../.env.example) to `.env.local`.
 2. Create `.secrets/google-service-account.json`.
 3. Start local Postgres and Redis.
 4. Run `pip install -r requirements.txt`.

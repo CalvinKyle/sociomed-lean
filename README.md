@@ -36,7 +36,7 @@ Once deployed, these are the endpoints worth handing to your first design partne
 
 ## Quick Start
 
-Recommended runtime: Python 3.11. The repo is now pinned with [runtime.txt](/Users/calvinainebyona/Desktop/sociomed-lean/runtime.txt).
+Recommended runtime: Python 3.11. The repo is now pinned with [runtime.txt](runtime.txt).
 
 ```bash
 cp .env.example .env.local
@@ -48,8 +48,8 @@ uvicorn app.main:app --reload
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) to test the procurement endpoints.
 
-Production environment reference: [docs/ENVIRONMENTS.md](/Users/calvinainebyona/Desktop/sociomed-lean/docs/ENVIRONMENTS.md)
-Data blueprint reference: [docs/DATA_BLUEPRINT.md](/Users/calvinainebyona/Desktop/sociomed-lean/docs/DATA_BLUEPRINT.md)
+Production environment reference: [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md)
+Data blueprint reference: [docs/DATA_BLUEPRINT.md](docs/DATA_BLUEPRINT.md)
 
 ## Environment Sections
 
@@ -66,12 +66,31 @@ These are the concrete setup sections you need to address next:
 5. Render deployment
    The web service and Celery worker must share the same WhatsApp, Postgres, Redis, and sales-routing variables.
 
-Use [.env.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.example) for local machines and [.env.production.example](/Users/calvinainebyona/Desktop/sociomed-lean/.env.production.example) for production values.
+Use [.env.example](.env.example) for local machines and [.env.production.example](.env.production.example) for production values.
 
 ## Architecture
 
-WhatsApp Cloud API -> FastAPI -> PostgreSQL + Redis  
-Google Sheets -> sync script -> PostgreSQL
+```text
+WhatsApp Cloud API ──▶ FastAPI (routes) ──▶ services ──▶ data_access ──▶ PostgreSQL
+                              │                                   ▲
+                              ▼                                   │
+                          Celery (async)                     Redis (cache)
+                              │
+                      Google Sheets ──▶ sync_sheets_to_db.py ──▶ PostgreSQL
+```
+
+## Project Structure
+
+- `app/api/` — FastAPI routes and HTTP request handling.
+- `app/services/` — Catalog, procurement, WhatsApp, and asynchronous business workflows.
+- `app/data_access/` — Database queries and persistence operations.
+- `app/models/` — SQLAlchemy database models and model formatting helpers.
+- `app/schemas/` — Pydantic request and response schemas.
+- `app/integrations/` — External service adapters, including Google Sheets.
+- `app/core/` — Configuration, authentication, caching, currency, logging, and shared infrastructure.
+- `migrations/` — Alembic database migrations.
+- `tests/` — Automated pytest coverage for routes, services, and data behavior.
+- `docs/` — Environment and data-blueprint documentation.
 
 ## Product Model
 
@@ -114,8 +133,29 @@ Webhook messages are offloaded to Celery for responsiveness.
 - Run locally: `celery -A app.core.celery_app worker --loglevel=info`
 - Monitor with Flower if needed
 
+## Testing
+
+```bash
+pytest tests/ -v --cov=app --cov-report=term-missing
+```
+
+CI runs the test suite automatically via `.github/workflows/ci.yml` on every push and pull request.
+
+## Contributing
+
+Run the test suite locally before opening a pull request. All pull requests are reviewed before merge.
+
+## Known Limitations
+
+- There is no admin or vendor self-service UI yet; catalog changes go through Google Sheets and `sync_sheets_to_db.py`.
+- Exchange rates remain static unless `EXCHANGE_RATES_JSON` is set.
+
 ## Notes
 
 - Schema changes are handled only by Alembic migrations; run `alembic upgrade head` before starting or syncing.
 - Redis can be configured with either `REDIS_URL` or `REDIS_HOST` plus `REDIS_PORT`.
 - Swagger docs can be disabled in production with `ENABLE_OPEN_DOCS=false`.
+
+## License
+
+This project is proprietary and confidential; see [LICENSE](LICENSE).

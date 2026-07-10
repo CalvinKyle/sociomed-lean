@@ -5,7 +5,7 @@ services:
     region: us-east
     plan: standard
     
-    healthCheckPath: /api/catalog/categories
+    healthCheckPath: /api/health/liveness
     healthCheckInterval: 30
     
     autoDeploy: false
