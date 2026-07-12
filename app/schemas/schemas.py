@@ -88,6 +88,14 @@ class RFQResponse(BaseModel):
 
 class RFQStatusUpdate(BaseModel):
     status: str = Field(min_length=2, max_length=50, pattern=r"^[A-Za-z][A-Za-z0-9_ -]*$")
+    order_value: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Final agreed order value (price x quantity). Set when confirming or fulfilling "
+            "to enable commission tracking."
+        ),
+    )
 
 
 class RFQStatusResponse(BaseModel):

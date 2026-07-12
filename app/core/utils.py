@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Redis client for sessions + caching
 redis_client = redis.Redis.from_url(build_redis_url(), decode_responses=True)
+SEEN_MARKER_TTL_SECONDS = 60 * 60 * 24 * 30
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,13 @@ def save_session(user: str, data: Dict[str, Any]) -> None:
     key = f"session:{user}"
     data["_session_version"] = SESSION_VERSION
     redis_client.setex(key, SESSION_TTL, json.dumps(data))
+    redis_client.setex(f"session_seen:{user}", SEEN_MARKER_TTL_SECONDS, "1")
     logger.info(f"Session saved for {user} (Redis)")
+
+
+def has_seen_before(user: str) -> bool:
+    return bool(redis_client.exists(f"session_seen:{user}"))
+
 
 def get_session(user: str) -> Optional[Dict[str, Any]]:
     key = f"session:{user}"

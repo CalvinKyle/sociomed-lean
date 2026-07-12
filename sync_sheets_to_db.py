@@ -42,6 +42,14 @@ def _coerce_int(value, default=0):
     return int(str(value).replace(",", "").strip())
 
 
+def _coerce_float(value, default=None):
+    if value in (None, ""):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value).replace(",", "").strip())
+
+
 def _upsert(db, model_cls, pk_field: str, rows: list[dict], field_map: dict) -> tuple[int, int]:
     """
     Insert or update rows.  Returns (inserted, updated).
@@ -66,6 +74,30 @@ def _upsert(db, model_cls, pk_field: str, rows: list[dict], field_map: dict) -> 
             raw = row.get(sheet_key)
             setattr(obj, model_attr, str(raw).strip() if raw not in (None, "") else None)
 
+    return inserted, updated
+
+
+def _upsert_vendors(db, rows: list[dict]) -> tuple[int, int]:
+    """Upsert vendors while preserving numeric commission rates and blank existing rates."""
+    inserted = updated = 0
+    for row in rows:
+        vendor_id = str(row.get("vendor_id", "")).strip()
+        if not vendor_id:
+            continue
+        obj = db.get(Vendor, vendor_id)
+        if obj is None:
+            obj = Vendor(vendor_id=vendor_id)
+            db.add(obj)
+            inserted += 1
+        else:
+            updated += 1
+        obj.name = str(row.get("name", "")).strip() or None
+        obj.phone = str(row.get("phone", "")).strip() or None
+        obj.email = str(row.get("email", "")).strip() or None
+        obj.region = str(row.get("region", "")).strip() or None
+        raw_commission = row.get("commission_rate")
+        if raw_commission not in (None, ""):
+            obj.commission_rate = _coerce_float(raw_commission)
     return inserted, updated
 
 
@@ -132,12 +164,8 @@ def sync_sheets_to_db(dry_run: bool = False):
         logger.info("Products: %d inserted, %d updated", ins, upd)
 
         # ── vendors ──
-        ins, upd = _upsert(
-            db, Vendor, "vendor_id",
-            data["vendors"],
-            {"name": "name", "phone": "phone", "email": "email", "region": "region"},
-        )
-        logger.info("Vendors: %d inserted, %d updated", ins, upd)
+        v_inserted, v_updated = _upsert_vendors(db, data["vendors"])
+        logger.info("Vendors: %d inserted, %d updated", v_inserted, v_updated)
 
         # ── inventory ──
         for row in data["inventory"]:

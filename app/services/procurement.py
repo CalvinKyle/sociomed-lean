@@ -5,10 +5,16 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import SALES_AGENT_PHONE
+from app.core.rfq_status import (
+    BUYER_NOTIFIABLE_STATUSES,
+    RFQ_STATUSES,
+    InvalidRFQStatus,
+    is_valid_rfq_status,
+)
 from app.core.utils import WhatsAppSendResult, log_audit_event, send_whatsapp_message, send_whatsapp_message_result
 from app.data_access.funnel import record_funnel_event
 from app.data_access.procurement import create_buyer_lead_record, create_rfq_record, update_rfq_status
-from app.models.db import BuyerLead, RFQRequest
+from app.models.db import BuyerLead, RFQRequest, Vendor
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
 
 
@@ -112,11 +118,67 @@ def _normalize_rfq_status(status: str) -> str:
     return re.sub(r"[\s-]+", "_", status.strip().lower())
 
 
-def mark_rfq_status(db: Session, rfq_id: int, status: str) -> RFQRequest | None:
-    rfq = update_rfq_status(db, rfq_id, _normalize_rfq_status(status))
+def mark_rfq_status(
+    db: Session,
+    rfq_id: int,
+    status: str,
+    order_value: int | None = None,
+) -> RFQRequest | None:
+    normalized = _normalize_rfq_status(status)
+    if not is_valid_rfq_status(normalized):
+        raise InvalidRFQStatus(
+            f"'{status}' is not a recognized RFQ status. Use one of: {', '.join(RFQ_STATUSES)}."
+        )
+
+    rfq = update_rfq_status(db, rfq_id, normalized, order_value=order_value)
     if rfq:
         log_audit_event(rfq.phone, "rfq_status_updated", {"rfq_id": rfq.id, "status": rfq.status})
+        record_funnel_event(
+            "rfq_status_changed",
+            source="api",
+            actor_id=rfq.phone,
+            rfq_id=rfq.id,
+            data={"status": rfq.status, "order_value": rfq.order_value},
+        )
     return rfq
+
+
+BUYER_STATUS_MESSAGES = {
+    "confirmed": (
+        "Good news — your order (RFQ #{rfq_id}) for {product_name} is confirmed. "
+        "The supplier is preparing it and we'll follow up with delivery details shortly."
+    ),
+    "fulfilled": (
+        "Your order (RFQ #{rfq_id}) for {product_name} has been fulfilled. "
+        "Thank you for sourcing through SocioMed — reply 1 any time to start your next order."
+    ),
+}
+
+
+async def notify_buyer_of_status_change(rfq: RFQRequest) -> bool:
+    """Notify a buyer when an RFQ reaches a buyer-relevant milestone."""
+    if rfq.status not in BUYER_NOTIFIABLE_STATUSES:
+        return False
+
+    template = BUYER_STATUS_MESSAGES.get(rfq.status)
+    if not template:
+        return False
+
+    message = template.format(rfq_id=rfq.id, product_name=rfq.product_name)
+    result = await send_whatsapp_message_result(rfq.phone, message)
+    log_audit_event(
+        rfq.phone,
+        "rfq_status_buyer_notified" if result.success else "rfq_status_buyer_notify_failed",
+        {"rfq_id": rfq.id, "status": rfq.status, **result.to_audit_data()},
+    )
+    return result.success
+
+
+def estimate_commission(rfq: RFQRequest, vendor: Vendor | None) -> int | None:
+    """Estimate commission when both final order value and vendor rate are known."""
+    if rfq.order_value is None or not vendor or vendor.commission_rate is None:
+        return None
+    return round(rfq.order_value * (vendor.commission_rate / 100))
 
 
 def _rfq_summary(rfq: RFQRequest) -> str:

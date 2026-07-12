@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api import routes
 from app.core import auth
+from app.core.rfq_status import InvalidRFQStatus
 from app.models.db import get_db
 
 
@@ -71,10 +72,14 @@ def test_update_rfq_status_requires_api_key(monkeypatch):
 def test_update_rfq_status_returns_updated_status(monkeypatch):
     client = _client(monkeypatch)
 
-    def fake_mark_rfq_status(_db, rfq_id, status):
+    def fake_mark_rfq_status(_db, rfq_id, status, order_value=None):
         return SimpleNamespace(id=rfq_id, status=status.strip().lower())
 
+    async def fake_notify(_rfq):
+        return False
+
     monkeypatch.setattr(routes, "mark_rfq_status", fake_mark_rfq_status)
+    monkeypatch.setattr(routes, "notify_buyer_of_status_change", fake_notify)
 
     response = client.patch(
         "/api/rfqs/5/status",
@@ -88,7 +93,7 @@ def test_update_rfq_status_returns_updated_status(monkeypatch):
 
 def test_update_rfq_status_returns_404_for_missing_rfq(monkeypatch):
     client = _client(monkeypatch)
-    monkeypatch.setattr(routes, "mark_rfq_status", lambda _db, _rfq_id, _status: None)
+    monkeypatch.setattr(routes, "mark_rfq_status", lambda _db, _rfq_id, _status, order_value=None: None)
 
     response = client.patch(
         "/api/rfqs/999/status",
@@ -97,3 +102,46 @@ def test_update_rfq_status_returns_404_for_missing_rfq(monkeypatch):
     )
 
     assert response.status_code == 404
+
+
+def test_update_rfq_status_returns_400_for_unknown_status(monkeypatch):
+    client = _client(monkeypatch)
+
+    def reject_status(*_args, **_kwargs):
+        raise InvalidRFQStatus("Use one of: new, quoted, confirmed, fulfilled, cancelled, lost.")
+
+    monkeypatch.setattr(routes, "mark_rfq_status", reject_status)
+
+    response = client.patch(
+        "/api/rfqs/5/status",
+        json={"status": "in_review"},
+        headers={"X-API-Key": "secret"},
+    )
+
+    assert response.status_code == 400
+    assert "confirmed" in response.json()["detail"]
+
+
+def test_update_rfq_status_notifies_buyer_and_passes_order_value(monkeypatch):
+    client = _client(monkeypatch)
+    calls = []
+
+    def fake_mark(_db, rfq_id, status, order_value=None):
+        calls.append((rfq_id, status, order_value))
+        return SimpleNamespace(id=rfq_id, status="confirmed")
+
+    async def fake_notify(rfq):
+        calls.append(("notify", rfq.id))
+        return True
+
+    monkeypatch.setattr(routes, "mark_rfq_status", fake_mark)
+    monkeypatch.setattr(routes, "notify_buyer_of_status_change", fake_notify)
+
+    response = client.patch(
+        "/api/rfqs/5/status",
+        json={"status": "confirmed", "order_value": 250000},
+        headers={"X-API-Key": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [(5, "confirmed", 250000), ("notify", 5)]

@@ -46,7 +46,7 @@ Use these exact tabs and lowercase headers in Google Sheets:
 | Tab | Required columns |
 | --- | --- |
 | `products` | `product_id`, `name`, `category` |
-| `vendors` | `vendor_id`, `name`, `phone`, `email`, `region` |
+| `vendors` | `vendor_id`, `name`, `phone`, `email`, `region`, optional `commission_rate` (for example `8.5` for 8.5%) |
 | `inventory` | `inventory_id`, `product_id`, `vendor_id`, `brand`, `uom`, `stock_qty`, `lead_time_days` |
 | `pricing` | `pricing_id`, `inventory_id`, `min_qty`, `max_qty`, `unit_price` |
 | `aliases` | `alias`, `product_id` |

@@ -2,9 +2,11 @@ import logging
 import re
 from typing import Dict, Optional
 
+from rapidfuzz import fuzz
+
 from app.core.currency import format_price, get_currency_for_phone
 from app.core.states import ConversationState
-from app.core.utils import get_session, log_audit_event, save_session, send_whatsapp_message
+from app.core.utils import get_session, has_seen_before, log_audit_event, save_session, send_whatsapp_message
 from app.core.validators import (
     validate_delivery_location,
     validate_facility_name,
@@ -35,6 +37,17 @@ from app.services.search import find_products, get_results
 from app.core.cache import get_cached_data
 
 logger = logging.getLogger(__name__)
+
+# Buyer-facing strings are English-only today. This hook makes the current
+# assumption observable and provides a routing point for future translations.
+SUPPORTED_LANGUAGES = {"en"}
+FUZZY_SELECTION_THRESHOLD = 82
+FUZZY_SELECTION_MARGIN = 8
+
+
+def _detect_language(sender: str, text: str) -> str:
+    """Placeholder for future language detection; English is currently supported."""
+    return "en"
 
 
 def extract_message(body: Dict) -> Optional[Dict]:
@@ -183,7 +196,7 @@ def _append_related_products(reply: str, product: Dict, currency: str) -> tuple[
     if not related_products:
         return reply, []
 
-    lines = [reply, "", "Often sourced with this item:"]
+    lines = [reply, "", "Complete this order with:"]
     for index, related in enumerate(related_products, start=1):
         price = related.get("starting_price")
         price_text = format_price(price, currency) if price is not None else "Price on request"
@@ -208,6 +221,14 @@ def _resolve_category_selection(text: str, categories: list[str]) -> Optional[st
     if len(partial_matches) == 1:
         return partial_matches[0]
 
+    scored = sorted(
+        ((fuzz.WRatio(normalized_text, category.lower()), category) for category in categories),
+        key=lambda pair: -pair[0],
+    )
+    if scored and scored[0][0] >= FUZZY_SELECTION_THRESHOLD:
+        if len(scored) == 1 or scored[0][0] - scored[1][0] >= FUZZY_SELECTION_MARGIN:
+            return scored[0][1]
+
     return None
 
 
@@ -228,6 +249,14 @@ def _resolve_category_product_selection(text: str, category_name: str, displayed
     partial_matches = [product for product in category_products if normalized_text in product["name"].lower()]
     if len(partial_matches) == 1:
         return partial_matches[0]
+
+    scored = sorted(
+        ((fuzz.WRatio(normalized_text, product["name"].lower()), product) for product in category_products),
+        key=lambda pair: -pair[0],
+    )
+    if scored and scored[0][0] >= FUZZY_SELECTION_THRESHOLD:
+        if len(scored) == 1 or scored[0][0] - scored[1][0] >= FUZZY_SELECTION_MARGIN:
+            return scored[0][1]
 
     return None
 
@@ -344,6 +373,8 @@ async def handle_incoming_message(message: Dict):
         return
 
     text_clean = text.lower()
+    language = _detect_language(sender, text)
+    logger.debug("assumed_language sender=%s language=%s", sender, language)
     currency = get_currency_for_phone(sender)
 
     session = get_session(sender) or {}
@@ -363,7 +394,14 @@ async def handle_incoming_message(message: Dict):
         return
 
     if not session or current_state == ConversationState.IDLE.value:
-        await send_whatsapp_message(sender, _main_menu())
+        if not session and has_seen_before(sender):
+            await send_whatsapp_message(
+                sender,
+                "Your previous session timed out, so nothing you started was saved — "
+                "here's the main menu again.\n\n" + _main_menu(),
+            )
+        else:
+            await send_whatsapp_message(sender, _main_menu())
         _transition_session(sender, current_state, ConversationState.MENU)
         return
 
@@ -397,6 +435,12 @@ async def handle_incoming_message(message: Dict):
             return
         if text_clean == "6":
             categories = get_categories()
+            record_funnel_event(
+                "browse_categories",
+                source="whatsapp",
+                actor_id=sender,
+                data={"category_count": len(categories)},
+            )
             await send_whatsapp_message(sender, _browse_categories_message(categories))
             _transition_session(
                 sender,
@@ -581,6 +625,16 @@ async def handle_incoming_message(message: Dict):
 
         category_products = get_products_by_category(selected_category)
         displayed_products = category_products[:12]
+        record_funnel_event(
+            "results",
+            source="whatsapp",
+            actor_id=sender,
+            data={
+                "channel": "category_browse",
+                "category": selected_category,
+                "result_count": len(category_products),
+            },
+        )
         await send_whatsapp_message(sender, _category_products_message(selected_category, category_products))
         _transition_session(
             sender,
@@ -604,6 +658,16 @@ async def handle_incoming_message(message: Dict):
 
         data = get_cached_data()
         results = get_results(selected_product["product_id"], data, currency=currency)
+        record_funnel_event(
+            "results",
+            source="whatsapp",
+            actor_id=sender,
+            data={
+                "channel": "category_browse",
+                "product_id": selected_product["product_id"],
+                "result_count": len(results),
+            },
+        )
         if not results:
             await send_whatsapp_message(
                 sender,
@@ -645,6 +709,16 @@ async def handle_incoming_message(message: Dict):
                 return
 
             results = get_results(selected_product["product_id"], data, currency=currency)
+            record_funnel_event(
+                "cross_sell_click",
+                source="whatsapp",
+                actor_id=sender,
+                data={
+                    "from_product_id": session.get("product", {}).get("product_id"),
+                    "to_product_id": selected_product["product_id"],
+                    "position": related_index + 1,
+                },
+            )
             if not results:
                 await send_whatsapp_message(sender, "We do not have a live offer for that related item right now.")
                 return

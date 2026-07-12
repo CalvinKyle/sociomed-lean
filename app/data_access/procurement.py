@@ -47,12 +47,19 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
     return rfq
 
 
-def update_rfq_status(db: Session, rfq_id: int, status: str) -> RFQRequest | None:
+def update_rfq_status(
+    db: Session,
+    rfq_id: int,
+    status: str,
+    order_value: int | None = None,
+) -> RFQRequest | None:
     rfq = db.query(RFQRequest).filter(RFQRequest.id == rfq_id).first()
     if not rfq:
         return None
     rfq.status = status
     rfq.status_updated_at = datetime.utcnow()
+    if order_value is not None:
+        rfq.order_value = order_value
     db.commit()
     db.refresh(rfq)
     return rfq

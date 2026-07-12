@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import require_api_key
 from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, WHATSAPP_APP_SECRET
 from app.core.rate_limit import limiter
+from app.core.rfq_status import InvalidRFQStatus
 from app.core.utils import log_audit_event, redis_client
 from app.data_access.catalog import get_categories
 from app.data_access.funnel import record_funnel_event
@@ -33,6 +34,7 @@ from app.services.procurement import (
     dispatch_lead_notification,
     dispatch_rfq_notifications_detail,
     mark_rfq_status,
+    notify_buyer_of_status_change,
 )
 from app.services.tasks import process_whatsapp_message
 from app.services.whatsapp_service import (
@@ -179,9 +181,13 @@ async def create_rfq(request: Request, payload: RFQCreate, db: Session = Depends
     dependencies=[Depends(require_api_key)],
 )
 async def update_rfq_status_endpoint(rfq_id: int, payload: RFQStatusUpdate, db: Session = Depends(get_db)):
-    rfq = mark_rfq_status(db, rfq_id, payload.status)
+    try:
+        rfq = mark_rfq_status(db, rfq_id, payload.status, order_value=payload.order_value)
+    except InvalidRFQStatus as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not rfq:
         raise HTTPException(status_code=404, detail="rfq not found")
+    await notify_buyer_of_status_change(rfq)
     return RFQStatusResponse(rfq_id=rfq.id, status=rfq.status)
 
 

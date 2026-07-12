@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import DB_MAX_OVERFLOW, DB_POOL_RECYCLE_SECONDS, DB_POOL_SIZE, DATABASE_URL
@@ -38,6 +38,7 @@ class Vendor(Base):
     phone = Column(String)
     email = Column(String)
     region = Column(String)
+    commission_rate = Column(Float)
 
 class Inventory(Base):
     __tablename__ = "inventory"
@@ -98,6 +99,7 @@ class RFQRequest(Base):
     currency = Column(String, default="UGX", nullable=False)
     source = Column(String, default="api", nullable=False)
     status = Column(String, default="new", nullable=False)
+    order_value = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
