@@ -107,6 +107,40 @@ services:
           type: redis
           property: port
 
+  - type: worker
+    name: sociomed-lean-celery-beat
+    env: python
+    region: us-east
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.core.celery_app beat --loglevel=info
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: PHONE_NUMBER_ID
+        sync: false
+      - key: SALES_AGENT_PHONE
+        sync: false
+      - key: DATABASE_URL
+        fromService:
+          name: sociomed-postgres
+          type: pgsql
+          property: connectionString
+      - key: REDIS_HOST
+        fromService:
+          name: sociomed-redis
+          type: redis
+          property: host
+      - key: REDIS_PORT
+        fromService:
+          name: sociomed-redis
+          type: redis
+          property: port
+
   # ── Flower Monitoring Dashboard (added)
   - type: web
     name: sociomed-lean-flower

@@ -14,6 +14,7 @@ from app.core.validators import (
     validate_whatsapp_message,
 )
 from app.data_access.catalog import get_categories, get_products_by_category
+from app.data_access.funnel import record_funnel_event
 from app.models.db import SessionLocal
 from app.models.formatter import format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
@@ -431,7 +432,24 @@ async def handle_incoming_message(message: Dict):
 
         data = get_cached_data()
         product_matches = find_products(text, data.get("products", []), data.get("aliases", []), limit=5, data=data)
+        record_funnel_event(
+            "search",
+            source="whatsapp",
+            actor_id=sender,
+            data={"query": text, "match_count": len(product_matches)},
+        )
         if len(product_matches) > 1:
+            record_funnel_event(
+                "results",
+                source="whatsapp",
+                actor_id=sender,
+                data={
+                    "query": text,
+                    "result_count": len(product_matches),
+                    "product_ids": [product["product_id"] for product in product_matches],
+                    "requires_disambiguation": True,
+                },
+            )
             await send_whatsapp_message(sender, format_ambiguous_match_message(product_matches))
             _transition_session(
                 sender,
@@ -443,6 +461,12 @@ async def handle_incoming_message(message: Dict):
 
         product = product_matches[0] if product_matches else None
         if not product:
+            record_funnel_event(
+                "results",
+                source="whatsapp",
+                actor_id=sender,
+                data={"query": text, "result_count": 0, "requires_disambiguation": False},
+            )
             await send_whatsapp_message(
                 sender,
                 "I could not find that exact product. Try another search term, or reply 3 from the main menu to request a quotation.",
@@ -451,6 +475,17 @@ async def handle_incoming_message(message: Dict):
             return
 
         results = get_results(product["product_id"], data, currency=currency)
+        record_funnel_event(
+            "results",
+            source="whatsapp",
+            actor_id=sender,
+            data={
+                "query": text,
+                "result_count": len(results),
+                "product_ids": [product["product_id"]],
+                "requires_disambiguation": False,
+            },
+        )
         if not results:
             await send_whatsapp_message(
                 sender,
@@ -502,6 +537,17 @@ async def handle_incoming_message(message: Dict):
         selected_product = search_matches[selected_index]
         data = get_cached_data()
         results = get_results(selected_product["product_id"], data, currency=currency)
+        record_funnel_event(
+            "results",
+            source="whatsapp",
+            actor_id=sender,
+            data={
+                "result_count": len(results),
+                "product_ids": [selected_product["product_id"]],
+                "requires_disambiguation": False,
+                "disambiguated": True,
+            },
+        )
         if not results:
             await send_whatsapp_message(
                 sender,

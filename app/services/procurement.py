@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import SALES_AGENT_PHONE
 from app.core.utils import WhatsAppSendResult, log_audit_event, send_whatsapp_message, send_whatsapp_message_result
+from app.data_access.funnel import record_funnel_event
 from app.data_access.procurement import create_buyer_lead_record, create_rfq_record, update_rfq_status
 from app.models.db import BuyerLead, RFQRequest
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
@@ -96,6 +97,13 @@ def create_rfq_request(db: Session, payload: RFQCreate) -> RFQRequest:
         rfq.phone,
         "rfq_created",
         {"rfq_id": rfq.id, "product_name": rfq.product_name, "vendor_id": rfq.vendor_id},
+    )
+    record_funnel_event(
+        "rfq_submitted",
+        source=rfq.source,
+        actor_id=rfq.phone,
+        rfq_id=rfq.id,
+        data={"product_id": rfq.product_id, "product_name": rfq.product_name, "quantity": rfq.quantity},
     )
     return rfq
 
@@ -195,6 +203,19 @@ async def dispatch_rfq_notifications_detail(
                 "sales_notified": sales_attempt.success,
             },
         )
+
+    record_funnel_event(
+        "rfq_notified" if dispatch.supplier_notified else "rfq_notification_failed",
+        source=rfq.source,
+        actor_id=rfq.phone,
+        rfq_id=rfq.id,
+        data={
+            "status": dispatch.status,
+            "supplier_notified": dispatch.supplier_notified,
+            "sales_notified": sales_attempt.success,
+            "failure_reason": dispatch.failure_reason,
+        },
+    )
 
     return dispatch
 

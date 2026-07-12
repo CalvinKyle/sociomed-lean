@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta
+
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.db import BuyerLead, RFQRequest
@@ -49,6 +52,17 @@ def update_rfq_status(db: Session, rfq_id: int, status: str) -> RFQRequest | Non
     if not rfq:
         return None
     rfq.status = status
+    rfq.status_updated_at = datetime.utcnow()
     db.commit()
     db.refresh(rfq)
     return rfq
+
+
+def get_recent_rfqs(db: Session, since: datetime | None = None) -> list[RFQRequest]:
+    cutoff = since or datetime.utcnow() - timedelta(hours=24)
+    return (
+        db.query(RFQRequest)
+        .filter(or_(RFQRequest.created_at >= cutoff, RFQRequest.status_updated_at >= cutoff))
+        .order_by(RFQRequest.created_at.desc())
+        .all()
+    )

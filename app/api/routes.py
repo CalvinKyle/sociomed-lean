@@ -13,6 +13,7 @@ from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, 
 from app.core.rate_limit import limiter
 from app.core.utils import log_audit_event, redis_client
 from app.data_access.catalog import get_categories
+from app.data_access.funnel import record_funnel_event
 from app.models.db import SessionLocal, get_db
 from app.schemas.schemas import (
     BuyerLeadCreate,
@@ -118,6 +119,16 @@ async def public_catalog_search(
 ):
     """Search catalog with results in buyer's currency."""
     matches = search_catalog(q, limit=limit, currency=currency)
+    record_funnel_event(
+        "search",
+        source="api",
+        data={"query": q, "limit": limit, "currency": currency},
+    )
+    record_funnel_event(
+        "results",
+        source="api",
+        data={"query": q, "result_count": len(matches), "product_ids": [match["product_id"] for match in matches]},
+    )
     return CatalogSearchResponse(query=q, total_matches=len(matches), matches=matches)
 
 

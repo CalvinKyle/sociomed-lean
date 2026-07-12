@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String, Text, create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import DB_MAX_OVERFLOW, DB_POOL_RECYCLE_SECONDS, DB_POOL_SIZE, DATABASE_URL
@@ -99,6 +99,24 @@ class RFQRequest(Base):
     source = Column(String, default="api", nullable=False)
     status = Column(String, default="new", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FunnelEvent(Base):
+    __tablename__ = "funnel_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_type = Column(String(50), nullable=False)
+    actor_id = Column(String(64))
+    source = Column(String(50), nullable=False)
+    rfq_id = Column(Integer, ForeignKey("rfq_requests.id"))
+    event_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_funnel_events_event_type_created_at", "event_type", "created_at"),
+        Index("ix_funnel_events_rfq_id", "rfq_id"),
+    )
 
 
 def get_db():
