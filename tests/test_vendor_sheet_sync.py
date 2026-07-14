@@ -28,3 +28,14 @@ def test_vendor_upsert_coerces_rate_and_blank_does_not_clear_it():
     ) == (0, 1)
     assert db.objects["v1"].commission_rate == 8.5
     assert db.objects["v1"].name == "MedSource Updated"
+
+
+def test_vendor_upsert_coerces_owned_inventory_flag():
+    db = _FakeDb()
+
+    _upsert_vendors(
+        db,
+        [{"vendor_id": "zelus", "name": "Zelus Life", "is_own_inventory": "TRUE"}],
+    )
+
+    assert db.objects["zelus"].is_own_inventory is True

@@ -4,7 +4,7 @@ import json
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,8 @@ from app.core.rfq_status import InvalidRFQStatus
 from app.core.utils import log_audit_event, redis_client
 from app.data_access.catalog import get_categories
 from app.data_access.funnel import record_funnel_event
-from app.models.db import SessionLocal, get_db
+from app.data_access.procurement import get_rfq_line_items
+from app.models.db import RFQRequest, SessionLocal, get_db
 from app.schemas.schemas import (
     BuyerLeadCreate,
     BuyerLeadResponse,
@@ -36,6 +37,7 @@ from app.services.procurement import (
     mark_rfq_status,
     notify_buyer_of_status_change,
 )
+from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
 from app.services.tasks import process_whatsapp_message
 from app.services.whatsapp_service import (
     extract_message,
@@ -189,6 +191,32 @@ async def update_rfq_status_endpoint(rfq_id: int, payload: RFQStatusUpdate, db: 
         raise HTTPException(status_code=404, detail="rfq not found")
     await notify_buyer_of_status_change(rfq)
     return RFQStatusResponse(rfq_id=rfq.id, status=rfq.status)
+
+
+@router.get(
+    "/rfqs/{rfq_id}/pfi.pdf",
+    tags=["go-to-market"],
+    dependencies=[Depends(require_api_key)],
+)
+def download_rfq_pfi(rfq_id: int, db: Session = Depends(get_db)):
+    rfq = db.query(RFQRequest).filter(RFQRequest.id == rfq_id).first()
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found")
+
+    line_items = get_rfq_line_items(db, rfq_id)
+    if not line_items:
+        raise HTTPException(status_code=422, detail="RFQ has no line items to quote yet")
+
+    resolve_pfi_number(rfq)
+    pdf_bytes = generate_pfi_pdf(rfq, line_items)
+    db.commit()
+
+    safe_reference = rfq.pfi_reference.replace("/", "_")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="PFI_{safe_reference}.pdf"'},
+    )
 
 
 @router.get("/webhook")

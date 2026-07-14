@@ -8,6 +8,7 @@ from app.core.currency import format_price, get_currency_for_phone
 from app.core.states import ConversationState
 from app.core.utils import get_session, has_seen_before, log_audit_event, save_session, send_whatsapp_message
 from app.core.validators import (
+    validate_contact_name,
     validate_delivery_location,
     validate_facility_name,
     validate_product_query,
@@ -125,11 +126,11 @@ def _help_message() -> str:
 
 def _direct_rfq_prompt() -> str:
     return (
-        "Reply with your RFQ in one message.\n\n"
+        "Reply with your RFQ in one message: your name, then item(s), quantity, facility, and delivery location.\n\n"
         "Single item:\n"
-        "surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
+        "Dr. Ali | surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
         "Bulk list:\n"
-        "gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala"
+        "Dr. Ali | gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala"
     )
 
 
@@ -273,13 +274,16 @@ def _parse_buyer_intro(text: str, sender: str) -> tuple[str, str, str]:
     return buyer_name, organization, need
 
 
-def _parse_facility_details(text: str) -> tuple[str, str]:
+def _parse_buyer_facility_details(text: str) -> tuple[str, str, str]:
+    """Parse contact name, organization, and delivery location from a reply."""
     parts = [part.strip() for part in re.split(r"\n|,", text) if part.strip()]
     if not parts:
-        return "WhatsApp buyer", "Location not provided"
+        return "", "", ""
     if len(parts) == 1:
-        return parts[0], parts[0]
-    return parts[0], ", ".join(parts[1:])
+        return parts[0], "", ""
+    if len(parts) == 2:
+        return parts[0], parts[1], ""
+    return parts[0], parts[1], ", ".join(parts[2:])
 
 
 def _log_user_input(sender: str, state: str, text: str) -> None:
@@ -295,6 +299,7 @@ def _transition_session(sender: str, current_state: str, next_state: Conversatio
 
 async def _create_whatsapp_rfq(
     sender: str,
+    buyer_name: str,
     product_name: str,
     quantity: int,
     organization: str,
@@ -312,7 +317,7 @@ async def _create_whatsapp_rfq(
         rfq = create_rfq_request(
             db,
             RFQCreate(
-                buyer_name=sender,
+                buyer_name=buyer_name,
                 organization=organization,
                 phone=sender,
                 product_id=product_id,
@@ -812,8 +817,8 @@ async def handle_incoming_message(message: Dict):
         if text_clean == "1":
             await send_whatsapp_message(
                 sender,
-                "Reply with your facility/client name and delivery location.\n"
-                "Example: Mulago Hospital, Kampala",
+                "Reply with your name, facility/client name, and delivery location.\n"
+                "Example: Dr. Ali, Mulago Hospital, Kampala",
             )
             _transition_session(
                 sender,
@@ -856,19 +861,24 @@ async def handle_incoming_message(message: Dict):
         selected = session.get("selected_item", {})
         product = session.get("product", {})
         quantity = session.get("quantity", 1)
-        organization, delivery_location = _parse_facility_details(text)
+        contact_name, organization, delivery_location = _parse_buyer_facility_details(text)
 
-        if not validate_facility_name(organization) or not validate_delivery_location(delivery_location):
+        if (
+            not validate_contact_name(contact_name)
+            or not validate_facility_name(organization)
+            or not validate_delivery_location(delivery_location)
+        ):
             await send_whatsapp_message(
                 sender,
-                "Please reply with a valid facility/client name and delivery location.\n"
-                "Example: Mulago Hospital, Kampala",
+                "Please reply with your name, facility/client name, and delivery location.\n"
+                "Example: Dr. Ali, Mulago Hospital, Kampala",
             )
             return
 
         try:
             rfq_id, supplier_notified = await _create_whatsapp_rfq(
                 sender=sender,
+                buyer_name=contact_name,
                 product_name=product.get("name", selected.get("brand", "Medical supply")),
                 quantity=quantity,
                 organization=organization,
@@ -908,25 +918,27 @@ async def handle_incoming_message(message: Dict):
                 sender,
                 "Please use one of these formats:\n\n"
                 "Single item:\n"
-                "surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
+                "Dr. Ali | surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
                 "Bulk list:\n"
-                "gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala",
+                "Dr. Ali | gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala",
             )
             return
 
         if (
-            not validate_quantity(rfq_payload.quantity)
+            not validate_contact_name(rfq_payload.buyer_name)
+            or not validate_quantity(rfq_payload.quantity)
             or not validate_facility_name(rfq_payload.organization)
             or not validate_delivery_location(rfq_payload.delivery_location)
         ):
             await send_whatsapp_message(
                 sender,
-                "Please send a valid quantity, facility/client name, and delivery location.",
+                "Please send a valid name, quantity, facility/client name, and delivery location.",
             )
             return
         try:
             rfq_id, _ = await _create_whatsapp_rfq(
                 sender=sender,
+                buyer_name=rfq_payload.buyer_name,
                 product_name=rfq_payload.product_name,
                 quantity=rfq_payload.quantity,
                 organization=rfq_payload.organization,

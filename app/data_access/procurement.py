@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.db import BuyerLead, RFQRequest
+from app.models.db import BuyerLead, RFQLineItem, RFQRequest
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
 
 
@@ -25,16 +25,24 @@ def create_buyer_lead_record(db: Session, payload: BuyerLeadCreate) -> BuyerLead
 
 
 def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
+    items = payload.resolved_items()
+    primary = items[0]
+    summary_name = (
+        primary.product_name
+        if len(items) == 1
+        else f"{primary.product_name} +{len(items) - 1} more"
+    )
+
     rfq = RFQRequest(
         buyer_name=payload.buyer_name.strip(),
         organization=payload.organization.strip(),
         phone=payload.phone.strip(),
         email=payload.email,
-        product_id=payload.product_id,
-        product_name=payload.product_name.strip(),
-        vendor_id=payload.vendor_id,
-        vendor_name=payload.vendor_name,
-        quantity=payload.quantity,
+        product_id=primary.product_id,
+        product_name=summary_name,
+        vendor_id=primary.vendor_id,
+        vendor_name=primary.vendor_name,
+        quantity=primary.quantity,
         delivery_location=payload.delivery_location.strip(),
         notes=payload.notes,
         currency=payload.currency,
@@ -42,9 +50,35 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
         status="new",
     )
     db.add(rfq)
+    db.flush()
+
+    for item in items:
+        db.add(
+            RFQLineItem(
+                rfq_id=rfq.id,
+                product_id=item.product_id,
+                product_name=item.product_name.strip(),
+                vendor_id=item.vendor_id,
+                vendor_name=item.vendor_name,
+                quantity=item.quantity,
+                uom=item.uom,
+                unit_price=item.unit_price,
+                line_total=item.unit_price * item.quantity if item.unit_price is not None else None,
+            )
+        )
+
     db.commit()
     db.refresh(rfq)
     return rfq
+
+
+def get_rfq_line_items(db: Session, rfq_id: int) -> list[RFQLineItem]:
+    return (
+        db.query(RFQLineItem)
+        .filter(RFQLineItem.rfq_id == rfq_id)
+        .order_by(RFQLineItem.id)
+        .all()
+    )
 
 
 def update_rfq_status(

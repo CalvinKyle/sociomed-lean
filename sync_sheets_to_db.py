@@ -18,7 +18,6 @@ import argparse
 sys.path.insert(0, ".")
 
 from app.core.sheet_sync import prepare_sheet_data, split_multi_value_cell, summarize_vendor_phone_issues
-from app.integrations.sheets import load_data as load_from_sheets
 from app.models.db import (
     SessionLocal,
     Product,
@@ -48,6 +47,14 @@ def _coerce_float(value, default=None):
     if isinstance(value, (int, float)):
         return float(value)
     return float(str(value).replace(",", "").strip())
+
+
+def _coerce_bool(value, default=False):
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "yes", "1", "y"}
 
 
 def _upsert(db, model_cls, pk_field: str, rows: list[dict], field_map: dict) -> tuple[int, int]:
@@ -98,12 +105,17 @@ def _upsert_vendors(db, rows: list[dict]) -> tuple[int, int]:
         raw_commission = row.get("commission_rate")
         if raw_commission not in (None, ""):
             obj.commission_rate = _coerce_float(raw_commission)
+        raw_is_own = row.get("is_own_inventory")
+        if raw_is_own not in (None, ""):
+            obj.is_own_inventory = _coerce_bool(raw_is_own)
     return inserted, updated
 
 
 # ─── main ─────────────────────────────────────────────────────────────────────
 
 def sync_sheets_to_db(dry_run: bool = False):
+    from app.integrations.sheets import load_data as load_from_sheets
+
     logger.info("Starting sync from Google Sheets → PostgreSQL%s …", " (dry run)" if dry_run else "")
 
     # 1. Run migrations first. Abort if they fail.

@@ -27,6 +27,13 @@ def validate_facility_name(name):
     return isinstance(name, str) and 2 <= len(name.strip()) <= 160
 
 
+def validate_contact_name(name):
+    if not isinstance(name, str):
+        return False
+    normalized_name = name.strip()
+    return 2 <= len(normalized_name) <= 120 and not PHONE_PATTERN.match(normalized_name)
+
+
 def validate_delivery_location(location):
     return isinstance(location, str) and 2 <= len(location.strip()) <= 200
 

@@ -54,16 +54,32 @@ def test_digest_includes_computable_commission_and_skips_missing_rate(monkeypatc
             created_at=now - timedelta(days=2),
             status_updated_at=changed_at,
         ),
+        SimpleNamespace(
+            id=3,
+            product_name="Patient Monitor",
+            quantity=1,
+            organization="Key Care",
+            vendor_id="zelus",
+            order_value=2_500_000,
+            currency="UGX",
+            status="fulfilled",
+            created_at=now - timedelta(days=2),
+            status_updated_at=changed_at,
+        ),
     ]
     vendors = [
-        SimpleNamespace(vendor_id="v1", commission_rate=8.5),
-        SimpleNamespace(vendor_id="v2", commission_rate=None),
+        SimpleNamespace(vendor_id="v1", name="MedSource", commission_rate=8.5, is_own_inventory=False),
+        SimpleNamespace(vendor_id="v2", name="Other", commission_rate=None, is_own_inventory=False),
+        SimpleNamespace(vendor_id="zelus", name="Zelus Life", commission_rate=None, is_own_inventory=True),
     ]
     monkeypatch.setattr(rfq_digest, "SessionLocal", lambda: _FakeDb(vendors))
     monkeypatch.setattr(rfq_digest, "get_recent_rfqs", lambda _db, _cutoff: rfqs)
 
     digest = rfq_digest.build_daily_rfq_digest(now)
 
+    assert "Zelus commission revenue" in digest
     assert "est. total: 85,000 UGX" in digest
     assert "#1 Surgical Gloves" in digest
     assert "#2 IV Sets — order" not in digest
+    assert "Zelus direct revenue (owned inventory, total: 2,500,000 UGX)" in digest
+    assert "#3 Patient Monitor" in digest

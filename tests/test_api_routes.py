@@ -1,3 +1,4 @@
+from datetime import date
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -145,3 +146,49 @@ def test_update_rfq_status_notifies_buyer_and_passes_order_value(monkeypatch):
 
     assert response.status_code == 200
     assert calls == [(5, "confirmed", 250000), ("notify", 5)]
+
+
+def test_download_pfi_returns_pdf_and_persists_reference(monkeypatch):
+    rfq = SimpleNamespace(
+        id=5,
+        buyer_name="Dr. Ali",
+        organization="Key Care Mobile Medical Services",
+        currency="UGX",
+        pfi_reference=None,
+        created_at=date(2025, 2, 17),
+    )
+
+    class FakeQuery:
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return rfq
+
+    class FakeDb:
+        committed = False
+
+        def query(self, _model):
+            return FakeQuery()
+
+        def commit(self):
+            self.committed = True
+
+    db = FakeDb()
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[get_db] = lambda: db
+    monkeypatch.setattr(auth, "API_KEY", "secret")
+    monkeypatch.setattr(routes, "get_rfq_line_items", lambda *_args: [object()])
+    monkeypatch.setattr(routes, "generate_pfi_pdf", lambda *_args: b"%PDF-test")
+
+    response = TestClient(app).get(
+        "/api/rfqs/5/pfi.pdf",
+        headers={"X-API-Key": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-test"
+    assert response.headers["content-type"] == "application/pdf"
+    assert 'filename="PFI_KCMS_170225_05.pdf"' in response.headers["content-disposition"]
+    assert db.committed is True

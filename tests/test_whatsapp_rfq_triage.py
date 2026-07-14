@@ -76,15 +76,75 @@ def test_bulk_direct_rfq_is_logged_for_manual_triage(monkeypatch):
 
     asyncio.run(
         whatsapp_service.handle_incoming_message(
-            {"from": sender, "text": {"body": "gloves x10, catheters x5 | Mulago Hospital | Kampala"}}
+            {
+                "from": sender,
+                "text": {
+                    "body": "Dr. Ali | gloves x10, catheters x5 | Mulago Hospital | Kampala"
+                },
+            }
         )
     )
 
+    assert created_payload["buyer_name"] == "Dr. Ali"
     assert created_payload["source"] == "whatsapp_bulk_rfq"
     assert created_payload["product_name"] == "Bulk RFQ: gloves x10, catheters x5"
     assert "Bulk RFQ items" in created_payload["notes"]
     assert "bulk quotation request has been logged" in sent_messages[-1]
     assert any(event == "bulk_rfq_triaged" for _, event, _ in audit_events)
+
+
+def test_selected_offer_rfq_captures_contact_name(monkeypatch):
+    sender = "256700111111"
+    session_store = {
+        sender: {
+            "state": ConversationState.RFQ_FLOW.value,
+            "product": {"product_id": "p1", "name": "Patient Monitor"},
+            "selected_item": {"brand": "CareView", "vendor_name": "Zelus Life"},
+            "quantity": 1,
+        }
+    }
+    created_payload = {}
+    sent_messages = []
+
+    async def fake_send(_to, message):
+        sent_messages.append(message)
+        return True
+
+    async def fake_create(**kwargs):
+        created_payload.update(kwargs)
+        return 88, False
+
+    monkeypatch.setattr(whatsapp_service, "get_session", lambda user: session_store.get(user))
+    monkeypatch.setattr(
+        whatsapp_service,
+        "save_session",
+        lambda user, data: session_store.update({user: data}),
+    )
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(whatsapp_service, "_create_whatsapp_rfq", fake_create)
+
+    asyncio.run(
+        whatsapp_service.handle_incoming_message(
+            {"from": sender, "text": {"body": "Dr. Ali, Mulago Hospital, Kampala"}}
+        )
+    )
+
+    assert created_payload["buyer_name"] == "Dr. Ali"
+    assert created_payload["buyer_name"] != sender
+    assert created_payload["organization"] == "Mulago Hospital"
+    assert created_payload["delivery_location"] == "Kampala"
+    assert "RFQ #88" in sent_messages[-1]
+
+
+def test_buyer_facility_parser_requires_all_three_fields():
+    assert whatsapp_service._parse_buyer_facility_details(
+        "Dr. Ali, Mulago Hospital, Kampala"
+    ) == ("Dr. Ali", "Mulago Hospital", "Kampala")
+    assert whatsapp_service._parse_buyer_facility_details("Mulago Hospital, Kampala") == (
+        "Mulago Hospital",
+        "Kampala",
+        "",
+    )
 
 
 def test_related_product_selection_reuses_supplier_offer_flow(monkeypatch):

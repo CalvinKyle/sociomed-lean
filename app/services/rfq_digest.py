@@ -33,16 +33,31 @@ def build_daily_rfq_digest(now: datetime | None = None) -> str:
 
     commission_totals: dict[str, int] = {}
     commission_lines = []
+    direct_revenue_totals: dict[str, int] = {}
+    direct_revenue_lines = []
+
     for rfq in status_changes:
-        if rfq.status not in {"confirmed", "fulfilled"}:
+        if rfq.status not in {"confirmed", "fulfilled"} or not rfq.order_value:
             continue
-        commission = estimate_commission(rfq, vendors_by_id.get(rfq.vendor_id))
+        vendor = vendors_by_id.get(rfq.vendor_id)
+
+        if vendor and vendor.is_own_inventory:
+            direct_revenue_totals[rfq.currency] = (
+                direct_revenue_totals.get(rfq.currency, 0) + rfq.order_value
+            )
+            direct_revenue_lines.append(
+                f"#{rfq.id} {rfq.product_name} — {rfq.order_value:,} {rfq.currency} [{rfq.status}]"
+            )
+            continue
+
+        commission = estimate_commission(rfq, vendor)
         if commission is None:
             continue
         commission_totals[rfq.currency] = commission_totals.get(rfq.currency, 0) + commission
         commission_lines.append(
-            f"#{rfq.id} {rfq.product_name} — order {rfq.order_value:,} {rfq.currency}, "
-            f"est. commission {commission:,} {rfq.currency} [{rfq.status}]"
+            f"#{rfq.id} {rfq.product_name} ({vendor.name if vendor else 'unknown supplier'}) — "
+            f"order {rfq.order_value:,} {rfq.currency}, commission to Zelus "
+            f"{commission:,} {rfq.currency} [{rfq.status}]"
         )
 
     lines = [
@@ -52,11 +67,17 @@ def build_daily_rfq_digest(now: datetime | None = None) -> str:
     ]
     if statuses:
         lines.append("Current statuses: " + ", ".join(f"{status} {count}" for status, count in sorted(statuses.items())))
+    if direct_revenue_lines:
+        totals_text = ", ".join(
+            f"{amount:,} {currency}" for currency, amount in sorted(direct_revenue_totals.items())
+        )
+        lines.append(f"\nZelus direct revenue (owned inventory, total: {totals_text}):")
+        lines.extend(direct_revenue_lines)
     if commission_lines:
         totals_text = ", ".join(
             f"{amount:,} {currency}" for currency, amount in sorted(commission_totals.items())
         )
-        lines.append(f"\nConfirmed/fulfilled with commission (est. total: {totals_text}):")
+        lines.append(f"\nZelus commission revenue (from other suppliers, est. total: {totals_text}):")
         lines.extend(commission_lines)
     if new_rfqs:
         lines.append("\nNew requests:")

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import DB_MAX_OVERFLOW, DB_POOL_RECYCLE_SECONDS, DB_POOL_SIZE, DATABASE_URL
@@ -39,6 +39,7 @@ class Vendor(Base):
     email = Column(String)
     region = Column(String)
     commission_rate = Column(Float)
+    is_own_inventory = Column(Boolean, default=False, nullable=False)
 
 class Inventory(Base):
     __tablename__ = "inventory"
@@ -100,8 +101,27 @@ class RFQRequest(Base):
     source = Column(String, default="api", nullable=False)
     status = Column(String, default="new", nullable=False)
     order_value = Column(Integer, nullable=True)
+    pfi_reference = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RFQLineItem(Base):
+    __tablename__ = "rfq_line_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rfq_id = Column(Integer, ForeignKey("rfq_requests.id"), nullable=False)
+    product_id = Column(String)
+    product_name = Column(String, nullable=False)
+    vendor_id = Column(String)
+    vendor_name = Column(String)
+    quantity = Column(Integer, nullable=False, default=1)
+    uom = Column(String)
+    unit_price = Column(Integer)
+    line_total = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_rfq_line_items_rfq_id", "rfq_id"),)
 
 
 class FunnelEvent(Base):

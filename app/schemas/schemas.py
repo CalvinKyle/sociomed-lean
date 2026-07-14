@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CatalogOffer(BaseModel):
@@ -58,21 +58,68 @@ class BuyerLeadResponse(BaseModel):
     created_at: datetime
 
 
+class RFQLineItemCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    product_id: Optional[str] = Field(default=None, max_length=120)
+    product_name: str = Field(min_length=1, max_length=160)
+    vendor_id: Optional[str] = Field(default=None, max_length=120)
+    vendor_name: Optional[str] = Field(default=None, max_length=160)
+    quantity: int = Field(gt=0)
+    uom: Optional[str] = Field(default=None, max_length=80)
+    unit_price: Optional[int] = Field(default=None, gt=0)
+
+
 class RFQCreate(BaseModel):
     buyer_name: str = Field(min_length=2, max_length=120)
     organization: str = Field(min_length=2, max_length=160)
     phone: str = Field(min_length=7, max_length=32)
     email: Optional[str] = Field(default=None, max_length=160)
-    product_name: str = Field(min_length=2, max_length=160)
-    product_id: Optional[str] = Field(default=None, max_length=120)
-    vendor_id: Optional[str] = Field(default=None, max_length=120)
-    vendor_name: Optional[str] = Field(default=None, max_length=160)
-    vendor_phone: Optional[str] = Field(default=None, max_length=32)
-    quantity: int = Field(gt=0)
     delivery_location: str = Field(min_length=2, max_length=200)
     notes: Optional[str] = Field(default=None, max_length=2000)
     currency: str = Field(default="UGX", max_length=10)
     source: str = Field(default="api", max_length=50)
+
+    product_name: Optional[str] = Field(default=None, max_length=160)
+    product_id: Optional[str] = Field(default=None, max_length=120)
+    vendor_id: Optional[str] = Field(default=None, max_length=120)
+    vendor_name: Optional[str] = Field(default=None, max_length=160)
+    vendor_phone: Optional[str] = Field(default=None, max_length=32)
+    quantity: Optional[int] = Field(default=None, gt=0)
+    items: Optional[list[RFQLineItemCreate]] = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_item_source(self):
+        if not self.items and (not self.product_name or not self.quantity):
+            raise ValueError("Either `items` or `product_name` + `quantity` must be provided.")
+        return self
+
+    def resolved_items(self) -> list[RFQLineItemCreate]:
+        if self.items:
+            return self.items
+        assert self.product_name is not None
+        assert self.quantity is not None
+        return [
+            RFQLineItemCreate(
+                product_id=self.product_id,
+                product_name=self.product_name,
+                vendor_id=self.vendor_id,
+                vendor_name=self.vendor_name,
+                quantity=self.quantity,
+            )
+        ]
+
+
+class RFQLineItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    product_id: Optional[str]
+    product_name: str
+    vendor_name: Optional[str]
+    quantity: int
+    uom: Optional[str]
+    unit_price: Optional[int]
+    line_total: Optional[int]
 
 
 class RFQResponse(BaseModel):

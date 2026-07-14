@@ -2,13 +2,17 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from app.services.search import find_products, get_results
+
 
 BULK_MATCH_THRESHOLD = 3
 MAX_PRODUCT_NAME_LENGTH = 160
+ITEM_QUANTITY_PATTERN = re.compile(r"^(.*?)\s*[xX]\s*(\d+)$")
 
 
 @dataclass(frozen=True)
 class DirectRFQPayload:
+    buyer_name: str
     product_name: str
     quantity: int
     organization: str
@@ -31,6 +35,59 @@ def is_bulk_request(item_text: str) -> bool:
 
 def is_complex_bulk_request(item_text: str, threshold: int = BULK_MATCH_THRESHOLD) -> bool:
     return len(split_requested_items(item_text)) > threshold
+
+
+def _parse_item_text(item_text: str) -> tuple[str, int]:
+    """Parse a bulk fragment such as 'gloves x10', defaulting quantity to one."""
+    match = ITEM_QUANTITY_PATTERN.match(item_text.strip())
+    if not match:
+        return item_text.strip(), 1
+    name, quantity_text = match.groups()
+    return name.strip(), int(quantity_text)
+
+
+def resolve_bulk_line_items(items: list[str], data: dict, currency: str = "UGX") -> list[dict]:
+    """Resolve bulk fragments to their best catalog offers without dropping unmatched items."""
+    resolved = []
+    for item_text in items:
+        name_text, quantity = _parse_item_text(item_text)
+        matches = find_products(
+            name_text,
+            data.get("products", []),
+            data.get("aliases", []),
+            limit=1,
+            data=data,
+        )
+
+        if not matches:
+            resolved.append(
+                {
+                    "product_id": None,
+                    "product_name": name_text,
+                    "vendor_id": None,
+                    "vendor_name": None,
+                    "quantity": quantity,
+                    "uom": None,
+                    "unit_price": None,
+                }
+            )
+            continue
+
+        product = matches[0]
+        offers = get_results(product["product_id"], data, currency=currency)
+        best_offer = offers[0] if offers else None
+        resolved.append(
+            {
+                "product_id": product["product_id"],
+                "product_name": product["name"],
+                "vendor_id": best_offer.get("vendor_id") if best_offer else None,
+                "vendor_name": best_offer.get("vendor_name") if best_offer else None,
+                "quantity": quantity,
+                "uom": best_offer.get("uom") if best_offer else None,
+                "unit_price": best_offer.get("default_price") if best_offer else None,
+            }
+        )
+    return resolved
 
 
 def _split_pipe_message(text: str) -> list[str]:
@@ -56,8 +113,8 @@ def _bulk_notes(items: list[str], original_text: str) -> str:
 
 def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
     parts = _split_pipe_message(text)
-    if len(parts) >= 4:
-        item_text, quantity_text, facility, location = parts[:4]
+    if len(parts) >= 5:
+        buyer_name, item_text, quantity_text, facility, location = parts[:5]
         try:
             quantity = int(quantity_text)
         except ValueError:
@@ -66,6 +123,7 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
         items = split_requested_items(item_text)
         if len(items) > 1:
             return DirectRFQPayload(
+                buyer_name=buyer_name,
                 product_name=_bulk_product_name(items),
                 quantity=max(quantity, len(items)),
                 organization=facility,
@@ -77,6 +135,7 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
             )
 
         return DirectRFQPayload(
+            buyer_name=buyer_name,
             product_name=_trim_product_name(item_text),
             quantity=quantity,
             organization=facility,
@@ -85,10 +144,11 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
             notes="Generic RFQ from main menu",
         )
 
-    if len(parts) == 3 and is_bulk_request(parts[0]):
-        item_text, facility, location = parts
+    if len(parts) == 4 and is_bulk_request(parts[1]):
+        buyer_name, item_text, facility, location = parts
         items = split_requested_items(item_text)
         return DirectRFQPayload(
+            buyer_name=buyer_name,
             product_name=_bulk_product_name(items),
             quantity=len(items),
             organization=facility,
