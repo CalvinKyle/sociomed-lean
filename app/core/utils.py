@@ -1,9 +1,9 @@
-import requests
 import time
 import json
 import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
+import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
 from app.core.config import SESSION_TTL, SESSION_VERSION, WHATSAPP_TOKEN, PHONE_NUMBER_ID, build_redis_url
@@ -54,7 +54,8 @@ async def send_whatsapp_message_result(to: str, message: str) -> WhatsAppSendRes
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             provider_message_id = _extract_whatsapp_message_id(res.text)
             logger.info("whatsapp_message_sent recipient=%s provider_message_id=%s", to, provider_message_id)
