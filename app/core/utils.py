@@ -128,6 +128,22 @@ def acquire_session_lock(user: str, timeout: int = 10) -> bool:
 def release_session_lock(user: str) -> None:
     redis_client.delete(f"session_lock:{user}")
 
+# ── MESSAGE DEDUPE (Meta redelivers webhook events on timeout/retry) ──
+WHATSAPP_MESSAGE_DEDUPE_TTL_SECONDS = 60 * 60 * 24
+
+def claim_whatsapp_message(message_id: Optional[str]) -> bool:
+    """Atomically claim a WhatsApp message id for processing.
+
+    Returns True the first time an id is seen (safe to process). Returns
+    False if it was already claimed, meaning this is a duplicate webhook
+    delivery that should be skipped. An empty id fails open (returns True)
+    since we cannot dedupe without one.
+    """
+    if not message_id:
+        return True
+    key = f"wamid:{message_id}"
+    return bool(redis_client.set(key, "1", nx=True, ex=WHATSAPP_MESSAGE_DEDUPE_TTL_SECONDS))
+
 async def notify_vendor(vendor_phone: str, message: str) -> bool:
     if not vendor_phone:
         logger.warning("Vendor phone missing - cannot notify vendor")

@@ -12,7 +12,7 @@ from app.core.auth import require_api_key
 from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, WHATSAPP_APP_SECRET
 from app.core.rate_limit import limiter
 from app.core.rfq_status import InvalidRFQStatus
-from app.core.utils import log_audit_event, redis_client
+from app.core.utils import claim_whatsapp_message, log_audit_event, redis_client
 from app.data_access.catalog import get_categories
 from app.data_access.funnel import record_funnel_event
 from app.data_access.procurement import get_rfq_line_items
@@ -246,6 +246,14 @@ async def whatsapp_webhook(
 
         if not message:
             return {"status": "ignored"}
+
+        if not claim_whatsapp_message(message.get("id")):
+            log_audit_event(
+                message.get("from", "unknown"),
+                "webhook_duplicate_message_skipped",
+                {"message_id": message.get("id")},
+            )
+            return {"status": "duplicate_ignored"}
 
         process_whatsapp_message.delay(message)
 

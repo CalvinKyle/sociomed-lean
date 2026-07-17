@@ -54,6 +54,57 @@ def test_meta_webhook_verification_is_public(monkeypatch):
     assert response.text == "challenge-token"
 
 
+def _webhook_body(message_id: str = "wamid.ABC123") -> dict:
+    return {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [
+                                {
+                                    "id": message_id,
+                                    "from": "+256700000000",
+                                    "type": "text",
+                                    "text": {"body": "hello"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def test_webhook_enqueues_new_message(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(routes, "_verify_whatsapp_signature", lambda *_args: True)
+    monkeypatch.setattr(routes, "claim_whatsapp_message", lambda _message_id: True)
+    calls = []
+    monkeypatch.setattr(routes.process_whatsapp_message, "delay", lambda message: calls.append(message))
+
+    response = client.post("/api/webhook", json=_webhook_body("wamid.NEW"))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert len(calls) == 1
+
+
+def test_webhook_skips_redelivered_message(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(routes, "_verify_whatsapp_signature", lambda *_args: True)
+    monkeypatch.setattr(routes, "claim_whatsapp_message", lambda _message_id: False)
+    calls = []
+    monkeypatch.setattr(routes.process_whatsapp_message, "delay", lambda message: calls.append(message))
+
+    response = client.post("/api/webhook", json=_webhook_body("wamid.DUPLICATE"))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "duplicate_ignored"}
+    assert len(calls) == 0
+
+
 def test_protected_endpoint_requires_api_key(monkeypatch):
     client = _client(monkeypatch)
 
