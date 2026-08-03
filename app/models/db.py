@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, JSON, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import DB_MAX_OVERFLOW, DB_POOL_RECYCLE_SECONDS, DB_POOL_SIZE, DATABASE_URL
+from app.core.pfi_status import PFI_STATUS_NONE
 
 engine_kwargs = {"echo": False, "future": True}
 if DATABASE_URL.startswith("sqlite"):
@@ -102,8 +103,16 @@ class RFQRequest(Base):
     status = Column(String, default="new", nullable=False)
     order_value = Column(Integer, nullable=True)
     pfi_reference = Column(String, nullable=True)
+    pfi_status = Column(String, default=PFI_STATUS_NONE, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "pfi_status IN ('none', 'pending_approval', 'approved', 'held')",
+            name="ck_rfq_requests_pfi_status",
+        ),
+    )
 
 
 class RFQLineItem(Base):

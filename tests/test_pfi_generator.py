@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app.services.pfi_generator import (
     DEFAULT_TERMS,
+    PFI_DISCLAIMER,
     amount_in_words,
     generate_pfi_pdf,
     resolve_pfi_number,
@@ -28,6 +29,11 @@ def test_amount_in_words_matches_sample_total():
 
 def test_default_payment_terms_are_cash_on_delivery():
     assert DEFAULT_TERMS["payment_terms"] == "Cash on Delivery"
+
+
+def test_pfi_disclaimer_states_that_the_proforma_is_not_a_final_invoice():
+    assert "not a final invoice" in PFI_DISCLAIMER
+    assert "official invoice" in PFI_DISCLAIMER
 
 
 def test_resolve_pfi_number_uses_organization_initials_and_is_idempotent():

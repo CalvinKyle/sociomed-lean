@@ -90,7 +90,7 @@ def test_whatsapp_category_browse_flows_into_offer_selection(monkeypatch):
     assert session_store[sender]["state"] == ConversationState.CATEGORY_SELECTED.value
 
     asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "1"}}))
-    assert "Available Supplier Offers" in sent_messages[-1]
+    assert "Available Offers" in sent_messages[-1]
     assert session_store[sender]["state"] == ConversationState.VIEWING_RESULTS.value
     assert session_store[sender]["product"]["product_id"] == "p1"
 
@@ -135,6 +135,66 @@ def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch)
 
     assert "previous session timed out" in sent_messages[0]
     assert saved_sessions["256700111111"]["state"] == ConversationState.MENU.value
+
+
+def test_price_check_only_search_does_not_create_an_rfq(monkeypatch):
+    sender = "256700111111"
+    sessions = {sender: {"state": ConversationState.SEARCHING.value}}
+    sent_messages = []
+
+    async def fake_send(_to, message):
+        sent_messages.append(message)
+        return True
+
+    monkeypatch.setattr(whatsapp_service, "get_session", lambda user: sessions.get(user))
+    monkeypatch.setattr(
+        whatsapp_service,
+        "save_session",
+        lambda user, value: sessions.update({user: value}),
+    )
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(
+        whatsapp_service,
+        "get_cached_data",
+        lambda: {
+            "products": [{"product_id": "P-1", "name": "Surgical Gloves"}],
+            "aliases": [],
+        },
+    )
+    monkeypatch.setattr(
+        whatsapp_service,
+        "find_products",
+        lambda *_args, **_kwargs: [{"product_id": "P-1", "name": "Surgical Gloves"}],
+    )
+    monkeypatch.setattr(
+        whatsapp_service,
+        "get_results",
+        lambda *_args, **_kwargs: [
+            {
+                "brand": "SafeTouch",
+                "uom": "box",
+                "stock_qty": 10,
+                "lead_time_days": 2,
+                "default_price": 100_000,
+                "pricing": [{"min_qty": 1, "max_qty": None, "unit_price": 100_000}],
+            }
+        ],
+    )
+    monkeypatch.setattr(whatsapp_service, "get_related_catalog", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        whatsapp_service,
+        "_create_whatsapp_rfq",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("browse created an RFQ")),
+    )
+
+    asyncio.run(
+        whatsapp_service.handle_incoming_message(
+            {"from": sender, "type": "text", "text": {"body": "surgical gloves"}}
+        )
+    )
+
+    assert "Available Offers" in sent_messages[-1]
+    assert sessions[sender]["state"] == ConversationState.VIEWING_RESULTS.value
 
 
 def test_cross_sell_click_records_funnel_event(monkeypatch):

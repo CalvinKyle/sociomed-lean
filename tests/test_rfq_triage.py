@@ -92,6 +92,7 @@ def test_resolve_bulk_line_items_keeps_matched_and_unmatched_items(monkeypatch):
         "product_name": "Surgical Gloves",
         "vendor_id": "V-1",
         "vendor_name": "MedSource",
+        "vendor_phone": None,
         "quantity": 10,
         "uom": "box",
         "unit_price": 120_000,

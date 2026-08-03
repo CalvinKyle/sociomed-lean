@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from app.services.search import find_products, get_results
+from app.services.search import find_products, get_results, resolve_unit_price
 
 
 BULK_MATCH_THRESHOLD = 3
@@ -21,6 +21,7 @@ class DirectRFQPayload:
     notes: Optional[str] = None
     is_bulk: bool = False
     item_count: int = 1
+    requested_items: tuple[str, ...] = ()
 
 
 def split_requested_items(item_text: str) -> list[str]:
@@ -37,20 +38,25 @@ def is_complex_bulk_request(item_text: str, threshold: int = BULK_MATCH_THRESHOL
     return len(split_requested_items(item_text)) > threshold
 
 
-def _parse_item_text(item_text: str) -> tuple[str, int]:
+def _parse_item_text(item_text: str, default_quantity: int = 1) -> tuple[str, int]:
     """Parse a bulk fragment such as 'gloves x10', defaulting quantity to one."""
     match = ITEM_QUANTITY_PATTERN.match(item_text.strip())
     if not match:
-        return item_text.strip(), 1
+        return item_text.strip(), default_quantity
     name, quantity_text = match.groups()
     return name.strip(), int(quantity_text)
 
 
-def resolve_bulk_line_items(items: list[str], data: dict, currency: str = "UGX") -> list[dict]:
+def resolve_bulk_line_items(
+    items: list[str],
+    data: dict,
+    currency: str = "UGX",
+    default_quantity: int = 1,
+) -> list[dict]:
     """Resolve bulk fragments to their best catalog offers without dropping unmatched items."""
     resolved = []
     for item_text in items:
-        name_text, quantity = _parse_item_text(item_text)
+        name_text, quantity = _parse_item_text(item_text, default_quantity=default_quantity)
         matches = find_products(
             name_text,
             data.get("products", []),
@@ -66,6 +72,7 @@ def resolve_bulk_line_items(items: list[str], data: dict, currency: str = "UGX")
                     "product_name": name_text,
                     "vendor_id": None,
                     "vendor_name": None,
+                    "vendor_phone": None,
                     "quantity": quantity,
                     "uom": None,
                     "unit_price": None,
@@ -82,9 +89,10 @@ def resolve_bulk_line_items(items: list[str], data: dict, currency: str = "UGX")
                 "product_name": product["name"],
                 "vendor_id": best_offer.get("vendor_id") if best_offer else None,
                 "vendor_name": best_offer.get("vendor_name") if best_offer else None,
+                "vendor_phone": best_offer.get("vendor_phone") if best_offer else None,
                 "quantity": quantity,
                 "uom": best_offer.get("uom") if best_offer else None,
-                "unit_price": best_offer.get("default_price") if best_offer else None,
+                "unit_price": resolve_unit_price(best_offer, quantity) if best_offer else None,
             }
         )
     return resolved
@@ -132,6 +140,7 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
                 notes=_bulk_notes(items, text),
                 is_bulk=True,
                 item_count=len(items),
+                requested_items=tuple(items),
             )
 
         return DirectRFQPayload(
@@ -142,6 +151,7 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
             delivery_location=location,
             source="whatsapp_direct_rfq",
             notes="Generic RFQ from main menu",
+            requested_items=(item_text,),
         )
 
     if len(parts) == 4 and is_bulk_request(parts[1]):
@@ -157,6 +167,7 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
             notes=_bulk_notes(items, text),
             is_bulk=True,
             item_count=len(items),
+            requested_items=tuple(items),
         )
 
     return None
@@ -170,6 +181,6 @@ def format_ambiguous_match_message(matches: list[Dict]) -> str:
             "Reply RFQ if this is a bulk request, or AGENT for a sourcing handoff."
         )
     else:
-        next_step = "Reply with the product number you want to price first, or RFQ for a manual quotation."
+        next_step = "Reply with the product number you want to price first, or RFQ for a quotation."
 
     return f"I found multiple possible matches:\n{product_list}\n\n{next_step}"

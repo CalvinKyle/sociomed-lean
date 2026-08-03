@@ -206,6 +206,7 @@ def test_download_pfi_returns_pdf_and_persists_reference(monkeypatch):
         organization="Key Care Mobile Medical Services",
         currency="UGX",
         pfi_reference=None,
+        pfi_status="pending_approval",
         created_at=date(2025, 2, 17),
     )
 
@@ -230,7 +231,11 @@ def test_download_pfi_returns_pdf_and_persists_reference(monkeypatch):
     app.include_router(routes.router)
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(auth, "API_KEY", "secret")
-    monkeypatch.setattr(routes, "get_rfq_line_items", lambda *_args: [object()])
+    monkeypatch.setattr(
+        routes,
+        "get_rfq_line_items",
+        lambda *_args: [SimpleNamespace(unit_price=100, quantity=1)],
+    )
     monkeypatch.setattr(routes, "generate_pfi_pdf", lambda *_args: b"%PDF-test")
 
     response = TestClient(app).get(

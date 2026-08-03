@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="SocioMed Lean",
-    description="Procurement-ready WhatsApp marketplace for medical suppliers and buyers.",
+    description="Procurement-ready WhatsApp medical-supply sourcing for buyers.",
     version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs" if ENABLE_OPEN_DOCS else None,

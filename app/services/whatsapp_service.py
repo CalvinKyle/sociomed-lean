@@ -4,6 +4,7 @@ from typing import Dict, Optional
 
 from rapidfuzz import fuzz
 
+from app.core.config import SALES_AGENT_PHONE
 from app.core.currency import format_price, get_currency_for_phone
 from app.core.states import ConversationState
 from app.core.utils import get_session, has_seen_before, log_audit_event, save_session, send_whatsapp_message
@@ -19,7 +20,7 @@ from app.core.validators import (
 from app.data_access.catalog import get_categories, get_products_by_category
 from app.data_access.funnel import record_funnel_event
 from app.models.db import SessionLocal
-from app.models.formatter import format_results
+from app.models.formatter import MAX_VISIBLE_OFFERS, OFFER_OVERFLOW_LINE, OFFER_VALIDITY_DAYS, format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
 from app.services.catalog import get_featured_catalog, get_related_catalog
 from app.services.procurement import (
@@ -27,14 +28,17 @@ from app.services.procurement import (
     create_rfq_request,
     dispatch_lead_notification,
     dispatch_rfq_notifications,
+    generate_pfi_for_eligible_rfq,
+    handle_operator_pfi_command,
 )
 from app.services.rfq_triage import (
     format_ambiguous_match_message,
     is_bulk_request,
     is_complex_bulk_request,
     parse_direct_rfq_message,
+    resolve_bulk_line_items,
 )
-from app.services.search import find_products, get_results
+from app.services.search import find_products, get_results, resolve_unit_price
 from app.core.cache import get_cached_data
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,12 @@ FUZZY_SELECTION_MARGIN = 8
 def _detect_language(sender: str, text: str) -> str:
     """Placeholder for future language detection; English is currently supported."""
     return "en"
+
+
+def _same_whatsapp_number(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return left.strip().lstrip("+") == right.strip().lstrip("+")
 
 
 def extract_message(body: Dict) -> Optional[Dict]:
@@ -135,21 +145,24 @@ def _direct_rfq_prompt() -> str:
 
 
 def _featured_offers_message(currency: str) -> str:
-    offers = get_featured_catalog(limit=4)
+    offers = get_featured_catalog(limit=MAX_VISIBLE_OFFERS, currency=currency)
     if not offers:
         return "No featured offers are available right now. Reply 1 to search the catalog."
 
     lines = ["Featured procurement offers:\n"]
-    for index, offer in enumerate(offers, start=1):
+    for index, offer in enumerate(offers[:MAX_VISIBLE_OFFERS], start=1):
         starting_price = offer.get("starting_price")
         price_text = format_price(starting_price, currency) if starting_price is not None else "Price on request"
         uom = offer.get("uom") or "unit"
+        stock_status = "In Stock" if (offer.get("stock_qty") or 0) > 0 else "Out of Stock"
         lines.append(
-            f"{index}. {offer['product_name']} - {offer['brand']} from {offer.get('vendor_name', 'Supplier')}\n"
-            f"From {price_text} per {uom} | Stock {offer.get('stock_qty', 0)} | Lead time {offer.get('lead_time_days', 'N/A')} days"
+            f"{index}. {offer['product_name']} - {offer['brand']}\n"
+            f"{price_text} per {uom} | {stock_status} | Lead time {offer.get('lead_time_days', 'N/A')} days\n"
+            f"Offer validity: {OFFER_VALIDITY_DAYS} days"
         )
 
-    lines.append("\nReply with the product name you want to search, or reply 3 to request a quotation.")
+    lines.append(f"\n{OFFER_OVERFLOW_LINE}")
+    lines.append("Reply with the product name you want to search, or reply 3 to request a quotation.")
     return "\n\n".join(lines)
 
 
@@ -311,9 +324,23 @@ async def _create_whatsapp_rfq(
     vendor_phone: Optional[str] = None,
     notes: Optional[str] = None,
     currency: str = "UGX",
-) -> tuple[int, bool]:
+    uom: Optional[str] = None,
+    unit_price: Optional[int] = None,
+    items: Optional[list[dict]] = None,
+) -> tuple[int, bool, bool]:
     db = SessionLocal()
     try:
+        resolved_items = items or [
+            {
+                "product_id": product_id,
+                "product_name": product_name,
+                "vendor_id": vendor_id,
+                "vendor_name": vendor_name,
+                "quantity": quantity,
+                "uom": uom,
+                "unit_price": unit_price,
+            }
+        ]
         rfq = create_rfq_request(
             db,
             RFQCreate(
@@ -330,13 +357,15 @@ async def _create_whatsapp_rfq(
                 notes=notes,
                 currency=currency,
                 source=source,
+                items=resolved_items,
             ),
         )
+        pfi_result = await generate_pfi_for_eligible_rfq(db, rfq)
     finally:
         db.close()
 
     supplier_notified = await dispatch_rfq_notifications(rfq, vendor_phone)
-    return rfq.id, supplier_notified
+    return rfq.id, supplier_notified, pfi_result.generated
 
 
 async def _capture_sales_lead(sender: str, text: str, source: str) -> int:
@@ -368,6 +397,15 @@ async def handle_incoming_message(message: Dict):
         return
 
     text = _extract_text_body(message)
+    if _same_whatsapp_number(sender, SALES_AGENT_PHONE):
+        if text is not None:
+            db = SessionLocal()
+            try:
+                await handle_operator_pfi_command(db, sender, text)
+            finally:
+                db.close()
+        return
+
     if text is None:
         log_audit_event(
             sender,
@@ -396,6 +434,15 @@ async def handle_incoming_message(message: Dict):
     if text_clean in ["0", "m", "menu", "back"]:
         await send_whatsapp_message(sender, _main_menu())
         _transition_session(sender, current_state, ConversationState.MENU)
+        return
+
+    if text_clean == "more":
+        await send_whatsapp_message(
+            sender,
+            "Reply with: name | organization | what you need.\n"
+            "We will connect you with sales.",
+        )
+        _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
         return
 
     if not session or current_state == ConversationState.IDLE.value:
@@ -460,11 +507,9 @@ async def handle_incoming_message(message: Dict):
 
     if current_state == ConversationState.SEARCHING.value:
         if is_bulk_request(text):
-            detail = (
-                "This looks like a multi-item sourcing list, so we should capture it as one RFQ for manual routing."
-            )
+            detail = "This looks like a multi-item sourcing list, so we'll capture and route it as one RFQ."
             if is_complex_bulk_request(text):
-                detail = "This looks like a larger bulk sourcing list, so a SocioMed agent should triage it as one RFQ."
+                detail = "This looks like a larger bulk sourcing list, so we'll capture and route it as one RFQ."
             await send_whatsapp_message(
                 sender,
                 f"{detail}\n\n{_direct_rfq_prompt()}",
@@ -750,7 +795,6 @@ async def handle_incoming_message(message: Dict):
         options = session.get("options", [])
         if 1 <= option_num <= len(options):
             selected = options[option_num - 1]
-            sku_line = f"SKU: {selected.get('sku')}\n" if selected.get("sku") else ""
             _transition_session(
                 sender,
                 current_state,
@@ -761,11 +805,9 @@ async def handle_incoming_message(message: Dict):
             )
             await send_whatsapp_message(
                 sender,
-                f"You selected {selected['brand']} from {selected.get('vendor_name', 'Supplier')}.\n"
-                f"{sku_line}"
+                f"You selected {selected['brand']}.\n"
                 f"UoM: {selected.get('uom', 'unit')}\n"
-                f"Minimum order: {selected.get('min_qty', 1)} {selected.get('uom', 'unit')}\n"
-                f"Stock: {selected.get('stock_qty', 0)} {selected.get('uom', 'unit')}\n\n"
+                f"Stock: {'In Stock' if (selected.get('stock_qty') or 0) > 0 else 'Out of Stock'}\n\n"
                 f"How many {selected.get('uom', 'unit')} do you need?",
             )
             return
@@ -789,9 +831,11 @@ async def handle_incoming_message(message: Dict):
         if quantity < minimum_quantity:
             await send_whatsapp_message(
                 sender,
-                f"Minimum order for this offer is {minimum_quantity} {selected.get('uom', 'unit')}.",
+                "That quantity is unavailable for this offer. Reply with a different whole-number quantity.",
             )
             return
+
+        unit_price = resolve_unit_price(selected, quantity)
 
         _transition_session(
             sender,
@@ -801,10 +845,16 @@ async def handle_incoming_message(message: Dict):
             options=session.get("options", []),
             selected_item=selected,
             quantity=quantity,
+            unit_price=unit_price,
+        )
+        price_text = (
+            f"{format_price(unit_price, currency)} per {selected.get('uom', 'unit')}"
+            if unit_price is not None
+            else "Price on request — our team will follow up"
         )
         await send_whatsapp_message(
             sender,
-            f"Estimated starting price: {format_price(selected.get('default_price', 0), currency)} per {selected.get('uom', 'unit')}.\n\n"
+            f"Unit price: {price_text}.\n\n"
             "Reply with:\n"
             "1. Request quotation\n"
             "2. Talk to sales\n"
@@ -851,7 +901,7 @@ async def handle_incoming_message(message: Dict):
                 product=session.get("product"),
                 options=session.get("options", []),
             )
-            await send_whatsapp_message(sender, "Returning to the supplier offers.")
+            await send_whatsapp_message(sender, "Returning to the available offers.")
             return
 
         await send_whatsapp_message(sender, "Please reply with 1, 2, 3, or 0.")
@@ -876,7 +926,7 @@ async def handle_incoming_message(message: Dict):
             return
 
         try:
-            rfq_id, supplier_notified = await _create_whatsapp_rfq(
+            creation_result = await _create_whatsapp_rfq(
                 sender=sender,
                 buyer_name=contact_name,
                 product_name=product.get("name", selected.get("brand", "Medical supply")),
@@ -894,7 +944,11 @@ async def handle_incoming_message(message: Dict):
                     f"UoM: {selected.get('uom', 'unit')}"
                 ),
                 currency=currency,
+                uom=selected.get("uom"),
+                unit_price=resolve_unit_price(selected, quantity),
             )
+            rfq_id, supplier_notified = creation_result[:2]
+            pfi_generated = creation_result[2] if len(creation_result) > 2 else False
         except Exception as exc:
             log_audit_event(sender, "whatsapp_rfq_failed", {"error": str(exc)})
             await send_whatsapp_message(sender, "We could not submit your quotation request right now. Please try again shortly.")
@@ -902,11 +956,16 @@ async def handle_incoming_message(message: Dict):
             return
 
         supplier_text = "The supplier has been notified." if supplier_notified else "Our sales team will route it manually."
+        pricing_follow_up = (
+            ""
+            if pfi_generated
+            else "\nPrice on request — our team will confirm pricing and follow up."
+        )
         await send_whatsapp_message(
             sender,
             f"Quotation request received. RFQ #{rfq_id} has been created.\n"
             f"{supplier_text}\n"
-            "A follow-up will be shared with you shortly.",
+            f"A follow-up will be shared with you shortly.{pricing_follow_up}",
         )
         _transition_session(sender, current_state, ConversationState.MENU)
         return
@@ -936,7 +995,15 @@ async def handle_incoming_message(message: Dict):
             )
             return
         try:
-            rfq_id, _ = await _create_whatsapp_rfq(
+            data = get_cached_data()
+            resolved_items = resolve_bulk_line_items(
+                list(rfq_payload.requested_items),
+                data,
+                currency=currency,
+                default_quantity=rfq_payload.quantity if not rfq_payload.is_bulk else 1,
+            )
+            primary_vendor_phone = resolved_items[0].get("vendor_phone") if resolved_items else None
+            creation_result = await _create_whatsapp_rfq(
                 sender=sender,
                 buyer_name=rfq_payload.buyer_name,
                 product_name=rfq_payload.product_name,
@@ -946,7 +1013,11 @@ async def handle_incoming_message(message: Dict):
                 source=rfq_payload.source,
                 notes=rfq_payload.notes,
                 currency=currency,
+                vendor_phone=primary_vendor_phone,
+                items=resolved_items,
             )
+            rfq_id = creation_result[0]
+            pfi_generated = creation_result[2] if len(creation_result) > 2 else False
         except Exception as exc:
             log_audit_event(sender, "direct_whatsapp_rfq_failed", {"error": str(exc)})
             await send_whatsapp_message(sender, "We could not capture your quotation request right now. Please try again.")
@@ -962,7 +1033,12 @@ async def handle_incoming_message(message: Dict):
             await send_whatsapp_message(
                 sender,
                 f"Your bulk quotation request has been logged as RFQ #{rfq_id}.\n"
-                "A SocioMed agent will triage the list, match suppliers, and follow up with options.",
+                "The items were routed automatically. "
+                + (
+                    "Your priced proforma is awaiting internal approval."
+                    if pfi_generated
+                    else "Price on request — our team will confirm unresolved pricing and follow up."
+                ),
             )
             _transition_session(sender, current_state, ConversationState.MENU)
             return
@@ -970,7 +1046,11 @@ async def handle_incoming_message(message: Dict):
         await send_whatsapp_message(
             sender,
             f"Your quotation request has been logged as RFQ #{rfq_id}.\n"
-            "Our team will match it to suppliers and follow up with you.",
+            + (
+                "Your priced proforma is awaiting internal approval."
+                if pfi_generated
+                else "Price on request — our team will confirm pricing and follow up."
+            ),
         )
         _transition_session(sender, current_state, ConversationState.MENU)
         return

@@ -5,6 +5,12 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import SALES_AGENT_PHONE
+from app.core.pfi_status import (
+    PFI_STATUS_APPROVED,
+    PFI_STATUS_HELD,
+    PFI_STATUS_NONE,
+    PFI_STATUS_PENDING_APPROVAL,
+)
 from app.core.rfq_status import (
     BUYER_NOTIFIABLE_STATUSES,
     RFQ_STATUSES,
@@ -13,9 +19,27 @@ from app.core.rfq_status import (
 )
 from app.core.utils import WhatsAppSendResult, log_audit_event, send_whatsapp_message, send_whatsapp_message_result
 from app.data_access.funnel import record_funnel_event
-from app.data_access.procurement import create_buyer_lead_record, create_rfq_record, update_rfq_status
+from app.data_access.procurement import (
+    create_buyer_lead_record,
+    create_rfq_record,
+    get_rfq_line_items,
+    update_rfq_status,
+)
 from app.models.db import BuyerLead, RFQRequest, Vendor
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
+from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
+
+
+PFI_REQUIRED_FIELDS = (
+    "buyer_name",
+    "organization",
+    "phone",
+    "product_name",
+    "quantity",
+    "delivery_location",
+)
+OPERATOR_PFI_COMMAND_PATTERN = re.compile(r"^(YES|NO)\s+(\d+)$", re.IGNORECASE)
+PFI_APPROVED_BUYER_MESSAGE = "Your proforma invoice is ready — we'll share it with you shortly."
 
 
 @dataclass(frozen=True)
@@ -91,6 +115,14 @@ class RFQNotificationDispatch:
         return self.supplier_attempt.reason or self.sales_attempt.reason
 
 
+@dataclass(frozen=True)
+class PFIGenerationResult:
+    generated: bool
+    alert_sent: bool = False
+    reason: Optional[str] = None
+    total: Optional[int] = None
+
+
 def create_buyer_lead(db: Session, payload: BuyerLeadCreate) -> BuyerLead:
     lead = create_buyer_lead_record(db, payload)
     log_audit_event(lead.phone, "buyer_lead_created", {"lead_id": lead.id, "organization": lead.organization})
@@ -112,6 +144,145 @@ def create_rfq_request(db: Session, payload: RFQCreate) -> RFQRequest:
         data={"product_id": rfq.product_id, "product_name": rfq.product_name, "quantity": rfq.quantity},
     )
     return rfq
+
+
+def _pfi_fields_complete(rfq: RFQRequest) -> bool:
+    return all(getattr(rfq, field_name, None) not in {None, ""} for field_name in PFI_REQUIRED_FIELDS)
+
+
+def _pfi_product_summary(line_items: list) -> str:
+    return "; ".join(
+        f"{item.product_name} x{item.quantity} {item.uom or 'unit'}"
+        for item in line_items
+    )
+
+
+async def generate_pfi_for_eligible_rfq(db: Session, rfq: RFQRequest) -> PFIGenerationResult:
+    """Generate and stage a fully priced RFQ for explicit operator approval."""
+    if rfq.pfi_status != PFI_STATUS_NONE:
+        return PFIGenerationResult(generated=False, reason="pfi_already_processed")
+
+    line_items = get_rfq_line_items(db, rfq.id)
+    if not _pfi_fields_complete(rfq) or not line_items:
+        log_audit_event(rfq.phone, "pfi_generation_skipped", {"rfq_id": rfq.id, "reason": "incomplete_fields"})
+        return PFIGenerationResult(generated=False, reason="incomplete_fields")
+
+    if any(item.unit_price is None or item.unit_price <= 0 for item in line_items):
+        log_audit_event(rfq.phone, "pfi_generation_skipped", {"rfq_id": rfq.id, "reason": "unpriced_line_item"})
+        return PFIGenerationResult(generated=False, reason="unpriced_line_item")
+
+    total = sum(item.unit_price * item.quantity for item in line_items)
+    try:
+        resolve_pfi_number(rfq)
+        generate_pfi_pdf(rfq, line_items)
+        rfq.pfi_status = PFI_STATUS_PENDING_APPROVAL
+        db.commit()
+        db.refresh(rfq)
+    except Exception as exc:
+        db.rollback()
+        log_audit_event(
+            rfq.phone,
+            "pfi_generation_failed",
+            {"rfq_id": rfq.id, "error": str(exc)},
+        )
+        return PFIGenerationResult(generated=False, reason="generation_failed")
+
+    if not SALES_AGENT_PHONE:
+        log_audit_event(
+            rfq.phone,
+            "pfi_approval_alert_skipped",
+            {"rfq_id": rfq.id, "reason": "missing_sales_agent_phone"},
+        )
+        return PFIGenerationResult(generated=True, reason="missing_sales_agent_phone", total=total)
+
+    message = (
+        "PFI approval required\n"
+        f"RFQ ID: {rfq.id}\n"
+        f"Buyer: {rfq.buyer_name}\n"
+        f"Organization: {rfq.organization}\n"
+        f"Products: {_pfi_product_summary(line_items)}\n"
+        f"Total: {rfq.currency} {total:,}\n"
+        f"Reply YES {rfq.id} to approve or NO {rfq.id} to hold."
+    )
+    try:
+        result = await send_whatsapp_message_result(SALES_AGENT_PHONE, message)
+    except Exception as exc:
+        log_audit_event(
+            rfq.phone,
+            "pfi_approval_alert_failed",
+            {"rfq_id": rfq.id, "error": str(exc)},
+        )
+        return PFIGenerationResult(generated=True, reason="alert_exception", total=total)
+
+    log_audit_event(
+        rfq.phone,
+        "pfi_approval_alert_sent" if result.success else "pfi_approval_alert_failed",
+        {"rfq_id": rfq.id, **result.to_audit_data()},
+    )
+    return PFIGenerationResult(
+        generated=True,
+        alert_sent=result.success,
+        reason=None if result.success else "alert_failed",
+        total=total,
+    )
+
+
+def parse_operator_pfi_command(text: str) -> tuple[str, int] | None:
+    match = OPERATOR_PFI_COMMAND_PATTERN.fullmatch(text.strip())
+    if not match:
+        return None
+    keyword, rfq_id = match.groups()
+    return keyword.upper(), int(rfq_id)
+
+
+async def handle_operator_pfi_command(db: Session, sender: str, text: str) -> bool:
+    """Apply a strict pending-PFI command; unrelated operator input is ignored."""
+    command = parse_operator_pfi_command(text)
+    if not command:
+        log_audit_event(sender, "pfi_operator_command_ignored", {"reason": "unrecognized_command"})
+        return False
+
+    keyword, rfq_id = command
+    rfq = (
+        db.query(RFQRequest)
+        .filter(
+            RFQRequest.id == rfq_id,
+            RFQRequest.pfi_status == PFI_STATUS_PENDING_APPROVAL,
+        )
+        .first()
+    )
+    if not rfq:
+        log_audit_event(
+            sender,
+            "pfi_operator_command_ignored",
+            {"rfq_id": rfq_id, "reason": "missing_or_not_pending"},
+        )
+        return False
+
+    rfq.pfi_status = PFI_STATUS_APPROVED if keyword == "YES" else PFI_STATUS_HELD
+    db.commit()
+    db.refresh(rfq)
+    log_audit_event(
+        sender,
+        "pfi_operator_command_applied",
+        {"rfq_id": rfq.id, "pfi_status": rfq.pfi_status},
+    )
+
+    if rfq.pfi_status == PFI_STATUS_APPROVED:
+        try:
+            result = await send_whatsapp_message_result(rfq.phone, PFI_APPROVED_BUYER_MESSAGE)
+            log_audit_event(
+                rfq.phone,
+                "pfi_approved_buyer_notified" if result.success else "pfi_approved_buyer_notify_failed",
+                {"rfq_id": rfq.id, **result.to_audit_data()},
+            )
+        except Exception as exc:
+            log_audit_event(
+                rfq.phone,
+                "pfi_approved_buyer_notify_failed",
+                {"rfq_id": rfq.id, "error": str(exc)},
+            )
+    return True
 
 
 def _normalize_rfq_status(status: str) -> str:

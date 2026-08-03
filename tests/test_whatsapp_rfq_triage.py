@@ -70,6 +70,12 @@ def test_bulk_direct_rfq_is_logged_for_manual_triage(monkeypatch):
 
     monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send_whatsapp_message)
     monkeypatch.setattr(whatsapp_service, "_create_whatsapp_rfq", fake_create_whatsapp_rfq)
+    monkeypatch.setattr(
+        whatsapp_service,
+        "resolve_bulk_line_items",
+        lambda *_args, **_kwargs: [{"vendor_phone": None}],
+    )
+    monkeypatch.setattr(whatsapp_service, "get_cached_data", lambda: {})
     monkeypatch.setattr(whatsapp_service, "get_session", fake_get_session)
     monkeypatch.setattr(whatsapp_service, "save_session", fake_save_session)
     monkeypatch.setattr(whatsapp_service, "log_audit_event", lambda phone, event, data: audit_events.append((phone, event, data)))

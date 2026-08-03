@@ -83,3 +83,85 @@ def test_handle_incoming_message_processes_text_payloads(monkeypatch):
 
     assert replies == [("256700111111", whatsapp_service._help_message())]
     assert saved_sessions == [("256700111111", {"state": "MENU"})]
+
+
+def test_operator_message_is_intercepted_before_conversation_state_routing(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        def close(self):
+            calls.append("db_closed")
+
+    async def fake_handle(_db, sender, text):
+        calls.append((sender, text))
+        return False
+
+    monkeypatch.setattr(whatsapp_service, "SALES_AGENT_PHONE", "+256700999999")
+    monkeypatch.setattr(whatsapp_service, "SessionLocal", FakeDb)
+    monkeypatch.setattr(whatsapp_service, "handle_operator_pfi_command", fake_handle)
+    monkeypatch.setattr(
+        whatsapp_service,
+        "get_session",
+        lambda _sender: (_ for _ in ()).throw(AssertionError("operator reached buyer routing")),
+    )
+
+    asyncio.run(
+        whatsapp_service.handle_incoming_message(
+            {"from": "256700999999", "type": "text", "text": {"body": "unrelated"}}
+        )
+    )
+
+    assert calls == [("256700999999", "unrelated"), "db_closed"]
+
+
+def test_yes_shaped_message_from_non_operator_uses_normal_buyer_routing(monkeypatch):
+    replies = []
+    operator_calls = []
+
+    async def fake_send(_to, message):
+        replies.append(message)
+        return True
+
+    async def fake_operator(*args):
+        operator_calls.append(args)
+        return True
+
+    monkeypatch.setattr(whatsapp_service, "SALES_AGENT_PHONE", "+256700999999")
+    monkeypatch.setattr(whatsapp_service, "handle_operator_pfi_command", fake_operator)
+    monkeypatch.setattr(whatsapp_service, "get_session", lambda _sender: {"state": "MENU"})
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+
+    asyncio.run(
+        whatsapp_service.handle_incoming_message(
+            {"from": "256700111111", "type": "text", "text": {"body": "YES 42"}}
+        )
+    )
+
+    assert operator_calls == []
+    assert replies == ["Please reply with a number from 1 to 6."]
+
+
+def test_more_routes_to_sales_with_a_buyer_message(monkeypatch):
+    replies = []
+    saved_sessions = []
+
+    async def fake_send(_to, message):
+        replies.append(message)
+        return True
+
+    monkeypatch.setattr(whatsapp_service, "get_session", lambda _sender: {"state": "VIEWING_RESULTS"})
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(
+        whatsapp_service,
+        "save_session",
+        lambda sender, data: saved_sessions.append((sender, data)),
+    )
+
+    asyncio.run(
+        whatsapp_service.handle_incoming_message(
+            {"from": "256700111111", "type": "text", "text": {"body": "MORE"}}
+        )
+    )
+
+    assert replies == ["Reply with: name | organization | what you need.\nWe will connect you with sales."]
+    assert saved_sessions[0][1]["state"] == "TALK_TO_AGENT"

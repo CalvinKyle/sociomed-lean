@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import require_api_key
 from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, WHATSAPP_APP_SECRET
 from app.core.rate_limit import limiter
+from app.core.pfi_status import PFI_STATUS_NONE
 from app.core.rfq_status import InvalidRFQStatus
 from app.core.utils import claim_whatsapp_message, log_audit_event, redis_client
 from app.data_access.catalog import get_categories
@@ -34,6 +35,7 @@ from app.services.procurement import (
     create_rfq_request,
     dispatch_lead_notification,
     dispatch_rfq_notifications_detail,
+    generate_pfi_for_eligible_rfq,
     mark_rfq_status,
     notify_buyer_of_status_change,
 )
@@ -165,6 +167,7 @@ async def capture_buyer_lead(payload: BuyerLeadCreate, db: Session = Depends(get
 @limiter.limit("20/minute")
 async def create_rfq(request: Request, payload: RFQCreate, db: Session = Depends(get_db)):
     rfq = create_rfq_request(db, payload)
+    await generate_pfi_for_eligible_rfq(db, rfq)
     dispatch = await dispatch_rfq_notifications_detail(rfq, payload.vendor_phone)
     return RFQResponse(
         rfq_id=rfq.id,
@@ -206,6 +209,10 @@ def download_rfq_pfi(rfq_id: int, db: Session = Depends(get_db)):
     line_items = get_rfq_line_items(db, rfq_id)
     if not line_items:
         raise HTTPException(status_code=422, detail="RFQ has no line items to quote yet")
+    if rfq.pfi_status == PFI_STATUS_NONE:
+        raise HTTPException(status_code=409, detail="PFI has not passed the generation gate")
+    if any(item.unit_price is None or item.unit_price <= 0 for item in line_items):
+        raise HTTPException(status_code=422, detail="RFQ has an unresolved unit price")
 
     resolve_pfi_number(rfq)
     pdf_bytes = generate_pfi_pdf(rfq, line_items)

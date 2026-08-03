@@ -4,17 +4,27 @@ This is the refined translation of the co-founder clarifications into the curren
 
 ## Confirmed Product Decision
 
-SocioMed is staying `RFQ-first`.
+SocioMed is staying `RFQ-first` and WhatsApp-only for buyers. SocioMed is the
+medical-supply sourcing brand; Zelus Life is the sole commercial and legal
+entity. Partner supplier identity and contact details are internal-only.
 
 That means:
 
-- The current WhatsApp flow should optimize for sourcing, offer comparison, and quotation capture.
+- The current WhatsApp flow should optimize for medical-supply sourcing, offer comparison, and quotation capture.
 - We should persist leads and RFQs, not build a mandatory cart-and-order checkout flow.
 - Any future "checkout" work should only happen if the business model shifts toward direct ordering.
 
+The qualification model has exactly three buyer-facing states:
+
+1. **Browsing / price-check** — show ranked offers and record lead/funnel activity; do not create an RFQ.
+2. **RFQ** — an explicit quotation action creates exactly one RFQ with buyer name, organization, phone, product, quantity, and delivery location.
+3. **PFI-eligible** — an internal generation check applied when the RFQ is created; this is not a fourth buyer-facing state.
+
+Budget, tender, and urgency language is not classified automatically.
+
 ## What Is Already Aligned
 
-The repo already uses the "Clean 5" marketplace structure:
+The repo already uses the "Clean 5" catalog structure:
 
 - `products`
 - `vendors`
@@ -30,7 +40,7 @@ These clarifications are now reflected directly in the repo:
 
 1. Lowercase-safe sheet sync
    `sync_sheets_to_db.py` now normalizes incoming sheet headers and strips whitespace before loading records. This is the protection against `InventoryID` versus `inventory_id` style failures.
-2. Expanded marketplace fields
+2. Expanded catalog fields
    The data model now supports `vendors.email`, `vendors.region`, and `inventory.uom`.
 3. UoM-first offer display
    Catalog and WhatsApp offer messages now include `uom`, so the buyer sees "Box of 100" instead of a vague unit price.
@@ -38,6 +48,10 @@ These clarifications are now reflected directly in the repo:
    Offer summaries now show a real price range when quantity tiers exist.
 5. Vendor phone quality visibility
    The sync step now reports how many vendor numbers are valid, missing, or not in `+countrycode` format.
+6. Deterministic offer ranking and safe visibility
+   In-stock Zelus-owned inventory ranks first unless an in-stock partner is more than 10% cheaper. Out-of-stock owned inventory does not outrank available partner stock. WhatsApp shows at most three offers and never shows vendor identity, vendor contact details, exact stock quantity, cost, commission, margin, or ownership type.
+7. PFI approval workflow
+   `rfq_requests.pfi_status` is separate from the six-value RFQ lifecycle status and is one of `none`, `pending_approval`, `approved`, or `held`. A PFI is drafted only when every required RFQ field and every line-item unit price is present. Delivery remains excluded from automated totals.
 
 ## Sheet Structure To Use Now
 
@@ -61,6 +75,17 @@ Use these exact tabs and lowercase headers in Google Sheets:
    If a kit is UGX 475,000, store `475000`.
 4. Use aliases aggressively
    Add abbreviations, common misspellings, and brand terms that buyers actually type.
+5. Update stock status manually
+   The founder is the source of truth for `In Stock` and `Out of Stock`; there is no scheduled or live inventory sync.
+
+## Founder Operating Routine
+
+- Keep using the daily WhatsApp RFQ digest as the primary overview of new RFQs, status changes, Zelus direct revenue, and estimated commission revenue.
+- Treat each real-time `PFI approval required` WhatsApp alert separately from the digest. It includes the RFQ ID, buyer, organization, product summary, total, and strict reply instructions.
+- Reply `YES {rfq_id}` only when that pending PFI is approved. This changes `pfi_status` to `approved` and sends the buyer a short courtesy message; the founder still downloads and forwards the PDF manually.
+- Reply `NO {rfq_id}` to place the PFI on hold. The buyer is not messaged.
+- Unanswered approvals remain `pending_approval`; launch has no timeout or 24-hour re-alert.
+- Continue using the RFQ notes field for next actions and follow-up dates. Payment confirmation remains manual.
 
 ## Optional Product Columns Now Supported
 
@@ -112,7 +137,7 @@ Catalog search now uses a weighted index:
 | `products.category` | Medium |
 | `inventory.sku` | Medium |
 
-The buyer does not see match explanations. The index is designed to help procurement heads get to relevant supplier offers quickly, not to explain search mechanics.
+The buyer does not see match explanations. The index is designed to help procurement heads get to relevant sourcing offers quickly, not to explain search mechanics.
 
 ## Recommendation Rules
 
@@ -121,9 +146,9 @@ Recommendations are driven by `products.related_ids`.
 - Direct links are shown first.
 - Reverse links are also supported, so if product A lists product B, product B can recommend product A.
 - WhatsApp related products appear as `R1`, `R2`, `R3`.
-- Selecting `R1` loads that related product into the same supplier-offer flow, preserving RFQ-first behavior.
+- Selecting `R1` loads that related product into the same offer flow, preserving RFQ-first behavior.
 
-Different brands for the same item are already handled as supplier offers under the same `product_id`. In other words, one internal product can have multiple inventory rows from different vendors and brands, and the buyer compares them before submitting an RFQ.
+Different brands for the same item are handled as offers under the same `product_id`. One internal product can have multiple inventory rows from different vendors and brands, while vendor identity remains hidden from the buyer.
 
 ## Clarifications That Are Compatible Without More Code
 
@@ -140,14 +165,14 @@ Those rules are compatible with the current repo as long as the sheet is populat
 
 These are strong product ideas, but they are not same-day launch blockers:
 
-1. Multi-item request splitting
-   The current WhatsApp flow routes multi-item requests into RFQ mode, but it does not yet build a full parsed multi-line cart.
-2. Short-form session cart with checkout branching
+1. Short-form session cart with checkout branching
    Redis already stores the user session, but there is no dedicated cart model or `Checkout` flow yet. That is intentional while we remain RFQ-first.
-3. Recommendation quality scoring
+2. Recommendation quality scoring
    `related_ids` now supports linked-product recommendations, but there is not yet a performance-based scoring model using RFQ history or conversion data.
-4. PFI or PDF generation
-   The repo does not yet generate supplier-facing PDFs.
+3. Automated PFI delivery
+   The system generates the internal Zelus Life PFI draft, but it does not upload or send the PDF over WhatsApp or email. Founder approval and manual forwarding remain mandatory.
+4. PFI timeouts and re-alerts
+   Pending approvals remain pending indefinitely at launch.
 
 These belong in the next product iteration after the data quality and vendor coverage issues are fixed.
 

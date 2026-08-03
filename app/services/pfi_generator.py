@@ -45,6 +45,10 @@ DEFAULT_TERMS = {
     "warranty": "12 Months for Machines",
     "technical_backup": "Available 24/7 upon request.",
 }
+PFI_DISCLAIMER = (
+    "This proforma is an estimate, not a final invoice, and must be confirmed "
+    "against an official invoice once the order is confirmed."
+)
 
 _ONES = [
     "",
@@ -369,6 +373,19 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
             spaceAfter=6,
         )
     story.append(Paragraph(amount_note, amount_style))
+    story.append(
+        Paragraph(
+            escape(PFI_DISCLAIMER),
+            ParagraphStyle(
+                "pfi_disclaimer",
+                parent=styles["Normal"],
+                fontSize=8.5,
+                leading=11,
+                textColor=colors.HexColor("#444444"),
+                spaceAfter=6,
+            ),
+        )
+    )
 
     terms_rows = [
         ["Delivery:", resolved_terms["delivery"]],

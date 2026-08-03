@@ -7,6 +7,80 @@ from app.core.exchange_rates import convert_result_prices
 from app.core.sheet_sync import split_multi_value_cell
 
 
+# Default launch threshold: a partner must be more than 10% cheaper to outrank
+# available owned inventory. Keep this as the single tuning point.
+OWNED_OFFER_PRICE_ADVANTAGE_THRESHOLD = 0.10
+
+
+def _offer_price(offer: Dict) -> int | None:
+    price = offer.get("default_price")
+    if price is not None:
+        return price
+    prices = [
+        tier.get("unit_price")
+        for tier in offer.get("pricing", [])
+        if tier.get("unit_price") is not None
+    ]
+    return min(prices) if prices else None
+
+
+def _offer_sort_key(offer: Dict) -> tuple:
+    price = _offer_price(offer)
+    return (
+        0 if (offer.get("stock_qty") or 0) > 0 else 1,
+        0 if price is not None else 1,
+        price if price is not None else float("inf"),
+        offer.get("lead_time_days") if isinstance(offer.get("lead_time_days"), int) else float("inf"),
+        str(offer.get("brand") or "").lower(),
+        str(offer.get("inventory_id") or ""),
+    )
+
+
+def rank_offers(offers: List[Dict]) -> List[Dict]:
+    """Rank offers deterministically without suppressing owned or partner stock."""
+    ranked = sorted(offers, key=_offer_sort_key)
+    owned_in_stock = [
+        offer
+        for offer in ranked
+        if offer.get("is_own_inventory") and (offer.get("stock_qty") or 0) > 0
+    ]
+    if not owned_in_stock:
+        return ranked
+
+    owned_offer = owned_in_stock[0]
+    owned_price = _offer_price(owned_offer)
+    partner_in_stock = [
+        offer
+        for offer in ranked
+        if not offer.get("is_own_inventory") and (offer.get("stock_qty") or 0) > 0
+    ]
+    cheapest_partner = partner_in_stock[0] if partner_in_stock else None
+    partner_price = _offer_price(cheapest_partner) if cheapest_partner else None
+
+    partner_beats_threshold = (
+        owned_price is not None
+        and partner_price is not None
+        and partner_price < owned_price * (1 - OWNED_OFFER_PRICE_ADVANTAGE_THRESHOLD)
+    )
+    if partner_beats_threshold:
+        return ranked
+
+    return [owned_offer, *(offer for offer in ranked if offer is not owned_offer)]
+
+
+def resolve_unit_price(offer: Dict, quantity: int) -> int | None:
+    """Resolve the confirmed quantity-tier price for an offer, or fail closed."""
+    tiers = offer.get("pricing", [])
+    if not tiers:
+        return offer.get("default_price")
+    for tier in sorted(tiers, key=lambda item: item.get("min_qty") or 0):
+        minimum = tier.get("min_qty") or 1
+        maximum = tier.get("max_qty")
+        if quantity >= minimum and (maximum is None or quantity <= maximum):
+            return tier.get("unit_price")
+    return None
+
+
 def _score_field(query: str, value: str, weight: float) -> float:
     value_clean = str(value or "").lower().strip()
     if not value_clean:
@@ -138,6 +212,7 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
             "vendor_id": vendor["vendor_id"],
             "vendor_phone": vendor.get("phone"),
             "vendor_name": vendor.get("name", ""),
+            "is_own_inventory": bool(vendor.get("is_own_inventory")),
         }
         
         # Convert prices to buyer's currency
@@ -145,6 +220,4 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
         
         results.append(result)
     
-    # Sort by lowest entry price (now in buyer's currency)
-    results.sort(key=lambda r: r["pricing"][0]["unit_price"] if r["pricing"] else 999999)
-    return results
+    return rank_offers(results)
