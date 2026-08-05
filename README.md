@@ -2,7 +2,7 @@
 
 WhatsApp-native procurement infrastructure for medical supplies in East Africa.
 
-Procurement teams can search products, compare supplier offers, and request quotations from WhatsApp or a lightweight landing page. Suppliers can receive matched RFQs in near real time.
+Procurement teams can search products, compare supplier offers, and request quotations from WhatsApp. Suppliers can receive matched RFQs in near real time.
 
 ## What To Ship This Week
 
