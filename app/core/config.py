@@ -42,6 +42,12 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "sales@socio-med.com")
 SALES_AGENT_PHONE = os.getenv("SALES_AGENT_PHONE")
 ENABLE_OPEN_DOCS = os.getenv("ENABLE_OPEN_DOCS", "true").lower() == "true"
 API_KEY = os.getenv("API_KEY")
+LAUNCH_MODE = os.getenv("LAUNCH_MODE", "true").lower() == "true"
+ENABLE_FEATURED_OFFERS = os.getenv("ENABLE_FEATURED_OFFERS", "false").lower() == "true"
+ENABLE_CATEGORY_BROWSE = os.getenv("ENABLE_CATEGORY_BROWSE", "false").lower() == "true"
+ENABLE_RELATED_PRODUCTS = os.getenv("ENABLE_RELATED_PRODUCTS", "false").lower() == "true"
+EXPOSE_SUPPLIER_NAMES = os.getenv("EXPOSE_SUPPLIER_NAMES", "false").lower() == "true"
+MAX_AUTO_PFI_LEAD_TIME_DAYS = int(os.getenv("MAX_AUTO_PFI_LEAD_TIME_DAYS", "0"))
 
 # DB pool settings for hosted PostgreSQL. SQLite ignores these.
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
@@ -61,22 +67,25 @@ def validate_config():
         "REDIS_URL_OR_HOST": REDIS_URL or REDIS_HOST,
     }
     if APP_ENV == "production":
-        google_credentials_available = bool(GOOGLE_CREDS_JSON) or (
-            bool(GOOGLE_CREDS_FILE) and os.path.exists(GOOGLE_CREDS_FILE)
-        )
         required.update(
             {
                 "VERIFY_TOKEN": VERIFY_TOKEN,
                 "WHATSAPP_TOKEN": WHATSAPP_TOKEN,
                 "PHONE_NUMBER_ID": PHONE_NUMBER_ID,
                 "WHATSAPP_APP_SECRET": WHATSAPP_APP_SECRET,
-                "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE": google_credentials_available,
-                "SHEET_NAME": SHEET_NAME,
                 "SALES_AGENT_PHONE": SALES_AGENT_PHONE,
                 "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
                 "API_KEY": API_KEY,
             }
         )
+        from app.core.merchant import get_merchant_config
+
+        merchant_config = get_merchant_config()
+        required.update(
+            {field_name: False for field_name in merchant_config.missing_required_fields}
+        )
+        if merchant_config.configuration_errors:
+            missing.extend(merchant_config.configuration_errors)
     for key, value in required.items():
         if not value:
             missing.append(key)

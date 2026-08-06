@@ -18,4 +18,3 @@ httpx==0.28.1
 sqlalchemy==2.0.51
 psycopg2-binary==2.9.12
 alembic==1.18.5
-flower==2.0.1          # optional: nice web dashboard for monitoring tasks

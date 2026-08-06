@@ -44,10 +44,17 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
         vendor_name=primary.vendor_name,
         quantity=primary.quantity,
         delivery_location=payload.delivery_location.strip(),
+        procurement_stage=payload.procurement_stage,
+        required_delivery_date=payload.required_delivery_date,
         notes=payload.notes,
         currency=payload.currency,
         source=payload.source,
         status="new",
+        manual_review_required=payload.manual_review_required,
+        manual_review_reason=payload.manual_review_reason,
+        requires_credit=payload.requires_credit,
+        technical_review_required=payload.technical_review_required,
+        special_fulfilment_required=payload.special_fulfilment_required,
     )
     db.add(rfq)
     db.flush()
@@ -56,14 +63,22 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
         db.add(
             RFQLineItem(
                 rfq_id=rfq.id,
+                inventory_id=item.inventory_id,
                 product_id=item.product_id,
                 product_name=item.product_name.strip(),
+                brand=item.brand,
+                sku=item.sku,
+                item_type=item.item_type,
                 vendor_id=item.vendor_id,
                 vendor_name=item.vendor_name,
+                is_own_inventory=item.is_own_inventory,
                 quantity=item.quantity,
                 uom=item.uom,
                 unit_price=item.unit_price,
                 line_total=item.unit_price * item.quantity if item.unit_price is not None else None,
+                currency=item.currency or payload.currency,
+                price_source=item.price_source,
+                stock_verification_status=item.stock_verification_status,
             )
         )
 
@@ -86,14 +101,21 @@ def update_rfq_status(
     rfq_id: int,
     status: str,
     order_value: int | None = None,
+    payment_confirmation_reference: str | None = None,
 ) -> RFQRequest | None:
     rfq = db.query(RFQRequest).filter(RFQRequest.id == rfq_id).first()
     if not rfq:
         return None
+    changed = rfq.status != status
     rfq.status = status
-    rfq.status_updated_at = datetime.utcnow()
     if order_value is not None:
+        changed = changed or rfq.order_value != order_value
         rfq.order_value = order_value
+    if payment_confirmation_reference is not None:
+        changed = changed or rfq.payment_confirmation_reference != payment_confirmation_reference
+        rfq.payment_confirmation_reference = payment_confirmation_reference
+    if changed:
+        rfq.status_updated_at = datetime.utcnow()
     db.commit()
     db.refresh(rfq)
     return rfq

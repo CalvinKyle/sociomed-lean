@@ -3,13 +3,10 @@
 from typing import Dict, List, Optional
 from rapidfuzz import fuzz
 
+from app.core.config import MAX_AUTO_PFI_LEAD_TIME_DAYS
 from app.core.exchange_rates import convert_result_prices
 from app.core.sheet_sync import split_multi_value_cell
-
-
-# Default launch threshold: a partner must be more than 10% cheaper to outrank
-# available owned inventory. Keep this as the single tuning point.
-OWNED_OFFER_PRICE_ADVANTAGE_THRESHOLD = 0.10
+from app.services.pricing import resolve_price_for_quantity, validate_pricing_tiers
 
 
 def _offer_price(offer: Dict) -> int | None:
@@ -26,59 +23,50 @@ def _offer_price(offer: Dict) -> int | None:
 
 def _offer_sort_key(offer: Dict) -> tuple:
     price = _offer_price(offer)
+    stock_quantity = offer.get("stock_qty") or 0
+    lead_time = offer.get("lead_time_days")
+    owned = bool(offer.get("is_own_inventory"))
+    if owned and stock_quantity > 0:
+        availability_rank = 0
+    elif (
+        owned
+        and MAX_AUTO_PFI_LEAD_TIME_DAYS > 0
+        and isinstance(lead_time, int)
+        and 0 <= lead_time <= MAX_AUTO_PFI_LEAD_TIME_DAYS
+    ):
+        availability_rank = 1
+    elif not owned and stock_quantity > 0:
+        availability_rank = 2
+    elif not owned and isinstance(lead_time, int) and lead_time >= 0:
+        availability_rank = 3
+    else:
+        availability_rank = 4
     return (
-        0 if (offer.get("stock_qty") or 0) > 0 else 1,
-        0 if price is not None else 1,
+        availability_rank,
+        lead_time if isinstance(lead_time, int) else float("inf"),
         price if price is not None else float("inf"),
-        offer.get("lead_time_days") if isinstance(offer.get("lead_time_days"), int) else float("inf"),
         str(offer.get("brand") or "").lower(),
         str(offer.get("inventory_id") or ""),
     )
 
 
 def rank_offers(offers: List[Dict]) -> List[Dict]:
-    """Rank offers deterministically without suppressing owned or partner stock."""
-    ranked = sorted(offers, key=_offer_sort_key)
-    owned_in_stock = [
+    """Exclude commercially unsafe offers and rank valid stock deterministically."""
+    valid_offers = [
         offer
-        for offer in ranked
-        if offer.get("is_own_inventory") and (offer.get("stock_qty") or 0) > 0
+        for offer in offers
+        if validate_pricing_tiers(offer.get("pricing", [])).valid
     ]
-    if not owned_in_stock:
-        return ranked
-
-    owned_offer = owned_in_stock[0]
-    owned_price = _offer_price(owned_offer)
-    partner_in_stock = [
-        offer
-        for offer in ranked
-        if not offer.get("is_own_inventory") and (offer.get("stock_qty") or 0) > 0
-    ]
-    cheapest_partner = partner_in_stock[0] if partner_in_stock else None
-    partner_price = _offer_price(cheapest_partner) if cheapest_partner else None
-
-    partner_beats_threshold = (
-        owned_price is not None
-        and partner_price is not None
-        and partner_price < owned_price * (1 - OWNED_OFFER_PRICE_ADVANTAGE_THRESHOLD)
-    )
-    if partner_beats_threshold:
-        return ranked
-
-    return [owned_offer, *(offer for offer in ranked if offer is not owned_offer)]
+    return sorted(valid_offers, key=_offer_sort_key)
 
 
 def resolve_unit_price(offer: Dict, quantity: int) -> int | None:
-    """Resolve the confirmed quantity-tier price for an offer, or fail closed."""
-    tiers = offer.get("pricing", [])
-    if not tiers:
-        return offer.get("default_price")
-    for tier in sorted(tiers, key=lambda item: item.get("min_qty") or 0):
-        minimum = tier.get("min_qty") or 1
-        maximum = tier.get("max_qty")
-        if quantity >= minimum and (maximum is None or quantity <= maximum):
-            return tier.get("unit_price")
-    return None
+    """Backward-compatible wrapper around the shared fail-closed resolver."""
+    return resolve_price_for_quantity(
+        offer.get("pricing", []),
+        quantity,
+        offer.get("currency") or "UGX",
+    ).unit_price
 
 
 def _score_field(query: str, value: str, weight: float) -> float:
@@ -190,12 +178,14 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
         if not vendor:
             continue
         
-        pricing_tiers = data.get("pricing_by_inventory", {}).get(inv["inventory_id"], [])
-        if not pricing_tiers:
+        pricing_validation = validate_pricing_tiers(
+            data.get("pricing_by_inventory", {}).get(inv["inventory_id"], [])
+        )
+        if not pricing_validation.valid:
             continue
 
         # Pricing tiers are in base currency (UGX) from Google Sheets
-        pricing_tiers = sorted(pricing_tiers, key=lambda x: x["min_qty"])
+        pricing_tiers = list(pricing_validation.normalized_tiers)
         first_tier = pricing_tiers[0]
         
         result = {
@@ -213,10 +203,17 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
             "vendor_phone": vendor.get("phone"),
             "vendor_name": vendor.get("name", ""),
             "is_own_inventory": bool(vendor.get("is_own_inventory")),
+            "offer_type": "own_stock" if vendor.get("is_own_inventory") else "verified_partner_stock",
+            "availability_label": (
+                "SocioMed ready stock"
+                if vendor.get("is_own_inventory")
+                else "Verified partner stock"
+            ),
         }
         
         # Convert prices to buyer's currency
         result = convert_result_prices(result, currency)
+        result["currency"] = currency
         
         results.append(result)
     

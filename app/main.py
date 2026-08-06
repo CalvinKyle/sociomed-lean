@@ -28,7 +28,7 @@ app = FastAPI(
     docs_url="/docs" if ENABLE_OPEN_DOCS else None,
     redoc_url="/redoc" if ENABLE_OPEN_DOCS else None,
     openapi_tags=[
-        {"name": "go-to-market", "description": "Endpoints you can hand to procurement teams or a simple landing page."},
+        {"name": "go-to-market", "description": "Cashflow-first procurement and fulfilment endpoints."},
     ],
 )
 
@@ -44,11 +44,9 @@ async def root():
     return {
         "message": "SocioMed Lean procurement API",
         "status": "running",
-        "operating_model": "rfq_first",
-        "audience": ["procurement teams", "suppliers"],
+        "operating_model": "cashflow_first_whatsapp",
+        "audience": ["procurement buyers", "operations"],
         "actions": {
-            "featured_catalog": "/api/catalog/featured",
-            "browse_categories": "/api/catalog/categories",
             "catalog_search_example": "/api/catalog/search?q=surgical gloves",
             "submit_rfq": "/api/rfqs",
             "capture_lead": "/api/leads",

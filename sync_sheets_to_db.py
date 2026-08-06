@@ -169,6 +169,7 @@ def sync_sheets_to_db(dry_run: bool = False):
             {
                 "name": "name",
                 "category": "category",
+                "item_type": "item_type",
                 "clinical_speciality": "clinical_speciality",
                 "related_ids": "related_ids",
             },

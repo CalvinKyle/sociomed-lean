@@ -3,7 +3,7 @@
 from typing import Dict, List
 
 from app.core.cache import get_cached_data
-from app.core.config import DEFAULT_CURRENCY
+from app.core.config import DEFAULT_CURRENCY, MAX_AUTO_PFI_LEAD_TIME_DAYS
 from app.services.search import find_products, get_results
 
 
@@ -20,8 +20,8 @@ def _build_offer(product: Dict, result: Dict, currency: str = DEFAULT_CURRENCY) 
         "brand": result.get("brand", "Generic"),
         "sku": result.get("sku"),
         "uom": result.get("uom"),
-        "vendor_id": result.get("vendor_id"),
-        "vendor_name": result.get("vendor_name"),
+        "offer_type": result.get("offer_type", "verified_partner_stock"),
+        "availability_label": result.get("availability_label", "Verified partner stock"),
         "min_qty": result.get("min_qty", 1),
         "starting_price": min(all_prices) if all_prices else result.get("default_price"),
         "max_price": max(all_prices) if all_prices else result.get("default_price"),
@@ -59,7 +59,27 @@ def search_catalog(query: str, limit: int = 5, currency: str = DEFAULT_CURRENCY)
         results = get_results(product["product_id"], data, currency=currency)
         offers.extend(_build_offer(product, result, currency=currency) for result in results)
 
-    offers.sort(key=lambda offer: (offer["starting_price"] or 999999999, -(offer["stock_qty"] or 0)))
+    offers.sort(
+        key=lambda offer: (
+            0
+            if offer["offer_type"] == "own_stock" and (offer.get("stock_qty") or 0) > 0
+            else 1
+            if (
+                offer["offer_type"] == "own_stock"
+                and MAX_AUTO_PFI_LEAD_TIME_DAYS > 0
+                and isinstance(offer.get("lead_time_days"), int)
+                and 0 <= offer["lead_time_days"] <= MAX_AUTO_PFI_LEAD_TIME_DAYS
+            )
+            else 2
+            if (offer.get("stock_qty") or 0) > 0
+            else 3
+            if offer["offer_type"] == "verified_partner_stock"
+            else 4,
+            offer.get("lead_time_days") if isinstance(offer.get("lead_time_days"), int) else 999999,
+            offer["starting_price"] or 999999999,
+            str(offer.get("sku") or ""),
+        )
+    )
     return offers[:limit]
 
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -10,8 +10,8 @@ class CatalogOffer(BaseModel):
     brand: str
     sku: Optional[str] = None
     uom: Optional[str] = None
-    vendor_id: Optional[str] = None
-    vendor_name: Optional[str] = None
+    offer_type: Literal["own_stock", "verified_partner_stock"]
+    availability_label: str
     min_qty: int = 1
     starting_price: Optional[int] = None
     max_price: Optional[int] = None
@@ -61,13 +61,29 @@ class BuyerLeadResponse(BaseModel):
 class RFQLineItemCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
+    inventory_id: Optional[str] = Field(default=None, max_length=120)
     product_id: Optional[str] = Field(default=None, max_length=120)
     product_name: str = Field(min_length=1, max_length=160)
+    brand: Optional[str] = Field(default=None, max_length=160)
+    sku: Optional[str] = Field(default=None, max_length=120)
+    item_type: Literal["consumable", "equipment", "generic"] = "generic"
     vendor_id: Optional[str] = Field(default=None, max_length=120)
     vendor_name: Optional[str] = Field(default=None, max_length=160)
+    is_own_inventory: bool = False
     quantity: int = Field(gt=0)
     uom: Optional[str] = Field(default=None, max_length=80)
     unit_price: Optional[int] = Field(default=None, gt=0)
+    currency: Optional[str] = Field(default=None, max_length=10)
+    price_source: Optional[str] = Field(default=None, max_length=160)
+    stock_verification_status: Literal[
+        "verified_in_stock",
+        "verified_short_lead_time",
+        "partner_confirmation_required",
+        "out_of_stock",
+        "insufficient_stock",
+        "unknown",
+        "stale",
+    ] = "unknown"
 
 
 class RFQCreate(BaseModel):
@@ -76,6 +92,14 @@ class RFQCreate(BaseModel):
     phone: str = Field(min_length=7, max_length=32)
     email: Optional[str] = Field(default=None, max_length=160)
     delivery_location: str = Field(min_length=2, max_length=200)
+    procurement_stage: Literal[
+        "budgeting",
+        "approval_stage",
+        "ready_to_purchase",
+        "tender",
+        "market_sourcing",
+    ] = "market_sourcing"
+    required_delivery_date: Optional[datetime] = None
     notes: Optional[str] = Field(default=None, max_length=2000)
     currency: str = Field(default="UGX", max_length=10)
     source: str = Field(default="api", max_length=50)
@@ -87,6 +111,12 @@ class RFQCreate(BaseModel):
     vendor_phone: Optional[str] = Field(default=None, max_length=32)
     quantity: Optional[int] = Field(default=None, gt=0)
     items: Optional[list[RFQLineItemCreate]] = Field(default=None, min_length=1)
+    request_formal_pfi: bool = False
+    manual_review_required: bool = False
+    manual_review_reason: Optional[str] = Field(default=None, max_length=300)
+    requires_credit: bool = False
+    technical_review_required: bool = False
+    special_fulfilment_required: bool = False
 
     @model_validator(mode="after")
     def validate_item_source(self):
@@ -106,6 +136,7 @@ class RFQCreate(BaseModel):
                 vendor_id=self.vendor_id,
                 vendor_name=self.vendor_name,
                 quantity=self.quantity,
+                currency=self.currency,
             )
         ]
 
@@ -113,13 +144,18 @@ class RFQCreate(BaseModel):
 class RFQLineItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    inventory_id: Optional[str]
     product_id: Optional[str]
     product_name: str
-    vendor_name: Optional[str]
+    brand: Optional[str]
+    sku: Optional[str]
+    item_type: str
     quantity: int
     uom: Optional[str]
     unit_price: Optional[int]
     line_total: Optional[int]
+    currency: str
+    stock_verification_status: str
 
 
 class RFQResponse(BaseModel):
@@ -143,6 +179,14 @@ class RFQStatusUpdate(BaseModel):
             "to enable commission tracking."
         ),
     )
+    payment_confirmation_reference: Optional[str] = Field(default=None, min_length=2, max_length=160)
+
+    @model_validator(mode="after")
+    def require_payment_reference_for_confirmation(self):
+        normalized_status = self.status.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized_status == "confirmed" and not self.payment_confirmation_reference:
+            raise ValueError("payment_confirmation_reference is required when confirming an RFQ")
+        return self
 
 
 class RFQStatusResponse(BaseModel):

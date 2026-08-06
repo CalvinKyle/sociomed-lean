@@ -45,8 +45,12 @@ def format_results(product_name, results, currency="UGX"):
         uom = item.get("uom") or "unit"
         sku = item.get("sku")
         stock_status = "In Stock" if (item.get("stock_qty") or 0) > 0 else "Out of Stock"
+        availability_label = item.get("availability_label") or (
+            "SocioMed ready stock" if item.get("is_own_inventory") else "Verified partner stock"
+        )
 
         msg += f"*{counter}. {item['brand']}*\n"
+        msg += f"Offer type: {availability_label}\n"
         msg += f"UoM: {uom} | Unit price: {format_price_range(min_price, max_price, currency)}\n"
         msg += f"Stock: {stock_status} | Lead time: {item.get('lead_time_days', 'N/A')} days\n"
         msg += f"Offer validity: {OFFER_VALIDITY_DAYS} days\n"
@@ -71,6 +75,8 @@ def format_results(product_name, results, currency="UGX"):
             "min_qty": item.get("min_qty", 1),
             "default_price": item.get("default_price"),
             "pricing": item.get("pricing", []),
+            "currency": currency,
+            "availability_label": availability_label,
         })
 
     msg += f"{OFFER_OVERFLOW_LINE}\n0 → Main menu"

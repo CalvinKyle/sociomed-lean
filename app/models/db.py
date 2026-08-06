@@ -29,6 +29,7 @@ class Product(Base):
     product_id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     category = Column(String)
+    item_type = Column(String, default="generic", nullable=False)
     clinical_speciality = Column(String)
     related_ids = Column(Text)
 
@@ -97,6 +98,8 @@ class RFQRequest(Base):
     vendor_name = Column(String)
     quantity = Column(Integer, nullable=False, default=1)
     delivery_location = Column(String, nullable=False)
+    procurement_stage = Column(String, default="market_sourcing", nullable=False)
+    required_delivery_date = Column(DateTime, nullable=True)
     notes = Column(Text)
     currency = Column(String, default="UGX", nullable=False)
     source = Column(String, default="api", nullable=False)
@@ -104,6 +107,13 @@ class RFQRequest(Base):
     order_value = Column(Integer, nullable=True)
     pfi_reference = Column(String, nullable=True)
     pfi_status = Column(String, default=PFI_STATUS_NONE, nullable=False)
+    pfi_issued_at = Column(DateTime, nullable=True)
+    manual_review_required = Column(Boolean, default=False, nullable=False)
+    manual_review_reason = Column(String, nullable=True)
+    requires_credit = Column(Boolean, default=False, nullable=False)
+    technical_review_required = Column(Boolean, default=False, nullable=False)
+    special_fulfilment_required = Column(Boolean, default=False, nullable=False)
+    payment_confirmation_reference = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -111,6 +121,10 @@ class RFQRequest(Base):
         CheckConstraint(
             "pfi_status IN ('none', 'pending_approval', 'approved', 'held')",
             name="ck_rfq_requests_pfi_status",
+        ),
+        CheckConstraint(
+            "procurement_stage IN ('budgeting', 'approval_stage', 'ready_to_purchase', 'tender', 'market_sourcing')",
+            name="ck_rfq_requests_procurement_stage",
         ),
     )
 
@@ -120,14 +134,23 @@ class RFQLineItem(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     rfq_id = Column(Integer, ForeignKey("rfq_requests.id"), nullable=False)
+    inventory_id = Column(String)
     product_id = Column(String)
     product_name = Column(String, nullable=False)
+    brand = Column(String)
+    sku = Column(String)
+    item_type = Column(String, default="generic", nullable=False)
     vendor_id = Column(String)
     vendor_name = Column(String)
+    is_own_inventory = Column(Boolean, default=False, nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     uom = Column(String)
     unit_price = Column(Integer)
     line_total = Column(Integer)
+    currency = Column(String, default="UGX", nullable=False)
+    price_source = Column(String)
+    stock_verification_status = Column(String, default="unknown", nullable=False)
+    quoted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("ix_rfq_line_items_rfq_id", "rfq_id"),)

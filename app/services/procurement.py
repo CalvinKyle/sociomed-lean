@@ -1,10 +1,13 @@
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from app.core.config import SALES_AGENT_PHONE
+from app.core.cache import get_cached_data
+from app.core.config import MAX_AUTO_PFI_LEAD_TIME_DAYS, SALES_AGENT_PHONE
+from app.core.merchant import get_merchant_config
 from app.core.pfi_status import (
     PFI_STATUS_APPROVED,
     PFI_STATUS_HELD,
@@ -26,8 +29,11 @@ from app.data_access.procurement import (
     update_rfq_status,
 )
 from app.models.db import BuyerLead, RFQRequest, Vendor
-from app.schemas.schemas import BuyerLeadCreate, RFQCreate
+from app.schemas.schemas import BuyerLeadCreate, RFQCreate, RFQLineItemCreate
 from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
+from app.services.pfi_policy import evaluate_pfi_eligibility
+from app.services.pricing import resolve_price_for_quantity
+from app.services.search import get_results
 
 
 PFI_REQUIRED_FIELDS = (
@@ -121,6 +127,8 @@ class PFIGenerationResult:
     alert_sent: bool = False
     reason: Optional[str] = None
     total: Optional[int] = None
+    reason_codes: tuple[str, ...] = ()
+    buyer_message: Optional[str] = None
 
 
 def create_buyer_lead(db: Session, payload: BuyerLeadCreate) -> BuyerLead:
@@ -129,8 +137,140 @@ def create_buyer_lead(db: Session, payload: BuyerLeadCreate) -> BuyerLead:
     return lead
 
 
+def _stock_snapshot(offer: dict, quantity: int) -> str:
+    stock_quantity = offer.get("stock_qty")
+    owned = bool(offer.get("is_own_inventory"))
+    if not owned:
+        return "partner_confirmation_required"
+    if isinstance(stock_quantity, int) and stock_quantity >= quantity:
+        return "verified_in_stock"
+    if isinstance(stock_quantity, int) and stock_quantity > 0:
+        return "insufficient_stock"
+    lead_time = offer.get("lead_time_days")
+    if (
+        MAX_AUTO_PFI_LEAD_TIME_DAYS > 0
+        and isinstance(lead_time, int)
+        and 0 <= lead_time <= MAX_AUTO_PFI_LEAD_TIME_DAYS
+    ):
+        return "verified_short_lead_time"
+    return "out_of_stock"
+
+
+def _snapshot_catalog_items(payload: RFQCreate) -> list[RFQLineItemCreate]:
+    """Resolve protected API and WhatsApp items through the same catalog pricing path."""
+    items = payload.resolved_items()
+    if not any(item.inventory_id for item in items):
+        return items
+
+    data = get_cached_data()
+    inventory_by_id = {
+        inventory.get("inventory_id"): inventory
+        for inventory in data.get("inventory", [])
+        if inventory.get("inventory_id")
+    }
+    products_by_id = data.get("products_by_id") or {
+        product.get("product_id"): product for product in data.get("products", [])
+    }
+    snapshots: list[RFQLineItemCreate] = []
+
+    for item in items:
+        if not item.inventory_id:
+            snapshots.append(item)
+            continue
+        inventory = inventory_by_id.get(item.inventory_id)
+        if not inventory:
+            snapshots.append(
+                item.model_copy(
+                    update={
+                        "unit_price": None,
+                        "price_source": None,
+                        "stock_verification_status": "unknown",
+                    }
+                )
+            )
+            continue
+
+        product_id = inventory.get("product_id") or item.product_id
+        offers = get_results(product_id, data, currency=payload.currency) if product_id else []
+        offer = next((candidate for candidate in offers if candidate.get("inventory_id") == item.inventory_id), None)
+        if not offer:
+            snapshots.append(
+                item.model_copy(
+                    update={
+                        "product_id": product_id,
+                        "unit_price": None,
+                        "price_source": None,
+                        "stock_verification_status": "unknown",
+                    }
+                )
+            )
+            continue
+
+        resolution = resolve_price_for_quantity(offer.get("pricing", []), item.quantity, payload.currency)
+        product = products_by_id.get(product_id, {})
+        snapshots.append(
+            item.model_copy(
+                update={
+                    "product_id": product_id,
+                    "product_name": product.get("name") or item.product_name,
+                    "brand": offer.get("brand"),
+                    "sku": offer.get("sku"),
+                    "item_type": product.get("item_type") or "generic",
+                    "vendor_id": offer.get("vendor_id"),
+                    "vendor_name": offer.get("vendor_name"),
+                    "is_own_inventory": bool(offer.get("is_own_inventory")),
+                    "uom": offer.get("uom"),
+                    "unit_price": resolution.unit_price if resolution.eligible else None,
+                    "currency": resolution.currency or payload.currency,
+                    "price_source": resolution.pricing_id if resolution.eligible else None,
+                    "stock_verification_status": _stock_snapshot(offer, item.quantity),
+                }
+            )
+        )
+    return snapshots
+
+
+def _manual_review_reasons(payload: RFQCreate, items: list[RFQLineItemCreate]) -> list[str]:
+    reasons: list[str] = []
+    stage_reasons = {
+        "budgeting": "budgeting_only",
+        "tender": "tender_request",
+        "market_sourcing": "market_sourcing",
+    }
+    if payload.procurement_stage in stage_reasons:
+        reasons.append(stage_reasons[payload.procurement_stage])
+    if payload.requires_credit:
+        reasons.append("credit_request")
+    if payload.technical_review_required:
+        reasons.append("technical_review_required")
+    if payload.special_fulfilment_required:
+        reasons.append("special_fulfilment_required")
+    if payload.manual_review_required:
+        reasons.append(payload.manual_review_reason or "manual_review_required")
+
+    for item in items:
+        if item.unit_price is None or not item.price_source:
+            reasons.append("invalid_or_missing_price")
+        if not item.uom:
+            reasons.append("missing_uom")
+        if item.stock_verification_status != "verified_in_stock":
+            reasons.append(item.stock_verification_status or "stock_not_verified")
+        if not item.is_own_inventory:
+            reasons.append("partner_inventory")
+    return list(dict.fromkeys(reasons))
+
+
 def create_rfq_request(db: Session, payload: RFQCreate) -> RFQRequest:
-    rfq = create_rfq_record(db, payload)
+    snapshot_items = _snapshot_catalog_items(payload)
+    manual_reasons = _manual_review_reasons(payload, snapshot_items)
+    prepared_payload = payload.model_copy(
+        update={
+            "items": snapshot_items,
+            "manual_review_required": bool(manual_reasons),
+            "manual_review_reason": ",".join(manual_reasons) if manual_reasons else None,
+        }
+    )
+    rfq = create_rfq_record(db, prepared_payload)
     log_audit_event(
         rfq.phone,
         "rfq_created",
@@ -158,24 +298,39 @@ def _pfi_product_summary(line_items: list) -> str:
 
 
 async def generate_pfi_for_eligible_rfq(db: Session, rfq: RFQRequest) -> PFIGenerationResult:
-    """Generate and stage a fully priced RFQ for explicit operator approval."""
+    """Issue an automated PFI only when the complete launch policy passes."""
     if rfq.pfi_status != PFI_STATUS_NONE:
         return PFIGenerationResult(generated=False, reason="pfi_already_processed")
 
     line_items = get_rfq_line_items(db, rfq.id)
-    if not _pfi_fields_complete(rfq) or not line_items:
-        log_audit_event(rfq.phone, "pfi_generation_skipped", {"rfq_id": rfq.id, "reason": "incomplete_fields"})
-        return PFIGenerationResult(generated=False, reason="incomplete_fields")
+    eligibility = evaluate_pfi_eligibility(rfq, line_items, get_merchant_config())
+    if not eligibility.eligible:
+        rfq.manual_review_required = eligibility.requires_manual_review
+        rfq.manual_review_reason = ",".join(eligibility.reason_codes)
+        db.commit()
+        db.refresh(rfq)
+        log_audit_event(
+            rfq.phone,
+            "pfi_generation_skipped",
+            {"rfq_id": rfq.id, "reason_codes": list(eligibility.reason_codes)},
+        )
+        return PFIGenerationResult(
+            generated=False,
+            reason=eligibility.reason_codes[0] if eligibility.reason_codes else "pfi_not_eligible",
+            reason_codes=eligibility.reason_codes,
+            buyer_message=eligibility.buyer_message,
+        )
 
-    if any(item.unit_price is None or item.unit_price <= 0 for item in line_items):
-        log_audit_event(rfq.phone, "pfi_generation_skipped", {"rfq_id": rfq.id, "reason": "unpriced_line_item"})
-        return PFIGenerationResult(generated=False, reason="unpriced_line_item")
-
-    total = sum(item.unit_price * item.quantity for item in line_items)
+    total = sum(item.line_total for item in line_items)
     try:
         resolve_pfi_number(rfq)
         generate_pfi_pdf(rfq, line_items)
-        rfq.pfi_status = PFI_STATUS_PENDING_APPROVAL
+        rfq.pfi_status = PFI_STATUS_APPROVED
+        rfq.pfi_issued_at = datetime.utcnow()
+        rfq.status = "quoted"
+        rfq.status_updated_at = rfq.pfi_issued_at
+        rfq.manual_review_required = False
+        rfq.manual_review_reason = None
         db.commit()
         db.refresh(rfq)
     except Exception as exc:
@@ -187,43 +342,22 @@ async def generate_pfi_for_eligible_rfq(db: Session, rfq: RFQRequest) -> PFIGene
         )
         return PFIGenerationResult(generated=False, reason="generation_failed")
 
-    if not SALES_AGENT_PHONE:
-        log_audit_event(
-            rfq.phone,
-            "pfi_approval_alert_skipped",
-            {"rfq_id": rfq.id, "reason": "missing_sales_agent_phone"},
-        )
-        return PFIGenerationResult(generated=True, reason="missing_sales_agent_phone", total=total)
-
-    message = (
-        "PFI approval required\n"
-        f"RFQ ID: {rfq.id}\n"
-        f"Buyer: {rfq.buyer_name}\n"
-        f"Organization: {rfq.organization}\n"
-        f"Products: {_pfi_product_summary(line_items)}\n"
-        f"Total: {rfq.currency} {total:,}\n"
-        f"Reply YES {rfq.id} to approve or NO {rfq.id} to hold."
-    )
-    try:
-        result = await send_whatsapp_message_result(SALES_AGENT_PHONE, message)
-    except Exception as exc:
-        log_audit_event(
-            rfq.phone,
-            "pfi_approval_alert_failed",
-            {"rfq_id": rfq.id, "error": str(exc)},
-        )
-        return PFIGenerationResult(generated=True, reason="alert_exception", total=total)
-
     log_audit_event(
         rfq.phone,
-        "pfi_approval_alert_sent" if result.success else "pfi_approval_alert_failed",
-        {"rfq_id": rfq.id, **result.to_audit_data()},
+        "pfi_issued",
+        {"rfq_id": rfq.id, "pfi_reference": rfq.pfi_reference, "total": total, "status": rfq.status},
+    )
+    record_funnel_event(
+        "pfi_issued",
+        source=rfq.source,
+        actor_id=rfq.phone,
+        rfq_id=rfq.id,
+        data={"pfi_reference": rfq.pfi_reference, "total": total, "currency": rfq.currency},
     )
     return PFIGenerationResult(
         generated=True,
-        alert_sent=result.success,
-        reason=None if result.success else "alert_failed",
         total=total,
+        buyer_message="Your formal PFI is ready and has been issued.",
     )
 
 
@@ -260,6 +394,16 @@ async def handle_operator_pfi_command(db: Session, sender: str, text: str) -> bo
         return False
 
     rfq.pfi_status = PFI_STATUS_APPROVED if keyword == "YES" else PFI_STATUS_HELD
+    if keyword == "YES":
+        issued_at = datetime.utcnow()
+        rfq.status = "quoted"
+        rfq.status_updated_at = issued_at
+        rfq.pfi_issued_at = issued_at
+        rfq.manual_review_required = False
+        rfq.manual_review_reason = None
+    else:
+        rfq.manual_review_required = True
+        rfq.manual_review_reason = "operator_held_pfi"
     db.commit()
     db.refresh(rfq)
     log_audit_event(
@@ -294,16 +438,33 @@ def mark_rfq_status(
     rfq_id: int,
     status: str,
     order_value: int | None = None,
+    payment_confirmation_reference: str | None = None,
 ) -> RFQRequest | None:
     normalized = _normalize_rfq_status(status)
     if not is_valid_rfq_status(normalized):
         raise InvalidRFQStatus(
             f"'{status}' is not a recognized RFQ status. Use one of: {', '.join(RFQ_STATUSES)}."
         )
+    if normalized == "confirmed" and not str(payment_confirmation_reference or "").strip():
+        raise InvalidRFQStatus("A payment or acceptable LPO reference is required before confirmation.")
 
-    rfq = update_rfq_status(db, rfq_id, normalized, order_value=order_value)
+    rfq = update_rfq_status(
+        db,
+        rfq_id,
+        normalized,
+        order_value=order_value,
+        payment_confirmation_reference=payment_confirmation_reference,
+    )
     if rfq:
-        log_audit_event(rfq.phone, "rfq_status_updated", {"rfq_id": rfq.id, "status": rfq.status})
+        log_audit_event(
+            rfq.phone,
+            "rfq_status_updated",
+            {
+                "rfq_id": rfq.id,
+                "status": rfq.status,
+                "payment_confirmation_reference": rfq.payment_confirmation_reference,
+            },
+        )
         record_funnel_event(
             "rfq_status_changed",
             source="api",
@@ -317,7 +478,7 @@ def mark_rfq_status(
 BUYER_STATUS_MESSAGES = {
     "confirmed": (
         "Good news — your order (RFQ #{rfq_id}) for {product_name} is confirmed. "
-        "The supplier is preparing it and we'll follow up with delivery details shortly."
+        "Our fulfilment team is preparing it and we'll follow up with delivery details shortly."
     ),
     "fulfilled": (
         "Your order (RFQ #{rfq_id}) for {product_name} has been fulfilled. "

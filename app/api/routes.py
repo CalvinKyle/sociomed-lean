@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import json
-import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -9,9 +8,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.auth import require_api_key
-from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, WHATSAPP_APP_SECRET
+from app.core.config import VERIFY_TOKEN, WHATSAPP_APP_SECRET
+from app.core.merchant import get_merchant_config
 from app.core.rate_limit import limiter
-from app.core.pfi_status import PFI_STATUS_NONE
+from app.core.pfi_status import PFI_STATUS_APPROVED, PFI_STATUS_NONE
 from app.core.rfq_status import InvalidRFQStatus
 from app.core.utils import claim_whatsapp_message, log_audit_event, redis_client
 from app.data_access.catalog import get_categories
@@ -40,6 +40,7 @@ from app.services.procurement import (
     notify_buyer_of_status_change,
 )
 from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
+from app.services.pfi_policy import evaluate_pfi_eligibility
 from app.services.tasks import process_whatsapp_message
 from app.services.whatsapp_service import (
     extract_message,
@@ -69,7 +70,7 @@ async def liveness_check():
 
 @router.get("/health", dependencies=[Depends(require_api_key)])
 async def health_check():
-    checks = {"db": False, "redis": False, "sheets_credentials": False}
+    checks = {"db": False, "redis": False}
 
     db = SessionLocal()
     try:
@@ -85,17 +86,13 @@ async def health_check():
     except Exception as exc:
         log_audit_event("system", "health_redis_failed", {"error": str(exc)})
 
-    checks["sheets_credentials"] = bool(GOOGLE_CREDS_JSON) or (
-        bool(GOOGLE_CREDS_FILE) and os.path.exists(GOOGLE_CREDS_FILE)
-    )
-
     status = "healthy" if all(checks.values()) else "degraded"
     return JSONResponse(
         status_code=200 if status == "healthy" else 503,
         content={
             "status": status,
             "service": "sociomed-lean",
-            "audience": ["procurement-teams", "suppliers"],
+            "audience": ["procurement-buyers", "operations"],
             "checks": checks,
         },
     )
@@ -167,7 +164,8 @@ async def capture_buyer_lead(payload: BuyerLeadCreate, db: Session = Depends(get
 @limiter.limit("20/minute")
 async def create_rfq(request: Request, payload: RFQCreate, db: Session = Depends(get_db)):
     rfq = create_rfq_request(db, payload)
-    await generate_pfi_for_eligible_rfq(db, rfq)
+    if payload.request_formal_pfi:
+        await generate_pfi_for_eligible_rfq(db, rfq)
     dispatch = await dispatch_rfq_notifications_detail(rfq, payload.vendor_phone)
     return RFQResponse(
         rfq_id=rfq.id,
@@ -187,7 +185,13 @@ async def create_rfq(request: Request, payload: RFQCreate, db: Session = Depends
 )
 async def update_rfq_status_endpoint(rfq_id: int, payload: RFQStatusUpdate, db: Session = Depends(get_db)):
     try:
-        rfq = mark_rfq_status(db, rfq_id, payload.status, order_value=payload.order_value)
+        rfq = mark_rfq_status(
+            db,
+            rfq_id,
+            payload.status,
+            order_value=payload.order_value,
+            payment_confirmation_reference=payload.payment_confirmation_reference,
+        )
     except InvalidRFQStatus as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not rfq:
@@ -201,18 +205,33 @@ async def update_rfq_status_endpoint(rfq_id: int, payload: RFQStatusUpdate, db: 
     tags=["go-to-market"],
     dependencies=[Depends(require_api_key)],
 )
-def download_rfq_pfi(rfq_id: int, db: Session = Depends(get_db)):
+async def download_rfq_pfi(rfq_id: int, db: Session = Depends(get_db)):
     rfq = db.query(RFQRequest).filter(RFQRequest.id == rfq_id).first()
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found")
 
     line_items = get_rfq_line_items(db, rfq_id)
-    if not line_items:
-        raise HTTPException(status_code=422, detail="RFQ has no line items to quote yet")
     if rfq.pfi_status == PFI_STATUS_NONE:
-        raise HTTPException(status_code=409, detail="PFI has not passed the generation gate")
-    if any(item.unit_price is None or item.unit_price <= 0 for item in line_items):
-        raise HTTPException(status_code=422, detail="RFQ has an unresolved unit price")
+        generation = await generate_pfi_for_eligible_rfq(db, rfq)
+        if not generation.generated:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": generation.buyer_message
+                    or "This RFQ requires sales review before a PFI can be issued.",
+                    "reason_codes": list(generation.reason_codes),
+                },
+            )
+        line_items = get_rfq_line_items(db, rfq_id)
+    if rfq.pfi_status != PFI_STATUS_APPROVED:
+        raise HTTPException(status_code=422, detail="This PFI requires manual sales approval before access.")
+
+    eligibility = evaluate_pfi_eligibility(rfq, line_items, get_merchant_config())
+    if not eligibility.eligible:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": eligibility.buyer_message, "reason_codes": list(eligibility.reason_codes)},
+        )
 
     resolve_pfi_number(rfq)
     pdf_bytes = generate_pfi_pdf(rfq, line_items)

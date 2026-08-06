@@ -1,4 +1,4 @@
-"""Generate Zelus Life proforma invoice PDFs from RFQs and line items."""
+"""Generate controlled proforma invoices from persisted RFQ price snapshots."""
 
 from __future__ import annotations
 
@@ -14,37 +14,11 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-ZELUS_NAVY = colors.HexColor("#1B2A6B")
-ZELUS_TINT = colors.HexColor("#F2F4FA")
+from app.core.merchant import MerchantConfig, get_merchant_config
 
-ZELUS_LETTERHEAD = {
-    "name": "ZELUS LIFE",
-    "tagline": '"Minds that Cure, Hearts that Care"',
-    "address_lines": [
-        "Plot 300, Nsooba Road",
-        "P. O. Box - 122156, Kampala - Uganda",
-        "Phone: +256 703 354 689",
-        "Phone: +256 776 151 491",
-        "Email: info@zeluslife.org",
-        "Website: www.zeluslife.com",
-    ],
-    "bank_details": [
-        "EQUITY BANK",
-        "ZELUS LIFE SMC LTD",
-        "1002201859693",
-        "BUGANDA ROAD",
-        "SUPREME BRANCH",
-    ],
-}
 
-DEFAULT_TERMS = {
-    "delivery": "Upon confirmation of LPO",
-    "validity_days": 30,
-    "payment_terms": "Cash on Delivery",
-    "installation": "Quoted amount is inclusive of installation and user training",
-    "warranty": "12 Months for Machines",
-    "technical_backup": "Available 24/7 upon request.",
-}
+PFI_NAVY = colors.HexColor("#1B2A6B")
+PFI_TINT = colors.HexColor("#F2F4FA")
 PFI_DISCLAIMER = (
     "This proforma is an estimate, not a final invoice, and must be confirmed "
     "against an official invoice once the order is confirmed."
@@ -143,7 +117,7 @@ def resolve_pfi_number(rfq, sequence: int | None = None) -> str:
 
 def _draw_page_footer(canvas: Canvas, document: SimpleDocTemplate) -> None:
     canvas.saveState()
-    canvas.setStrokeColor(ZELUS_NAVY)
+    canvas.setStrokeColor(PFI_NAVY)
     canvas.setLineWidth(0.5)
     canvas.line(14 * mm, 8 * mm, A4[0] - 14 * mm, 8 * mm)
     canvas.setFillColor(colors.HexColor("#555555"))
@@ -153,13 +127,75 @@ def _draw_page_footer(canvas: Canvas, document: SimpleDocTemplate) -> None:
     canvas.restoreState()
 
 
-def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
-    """Build a Zelus Life PFI and return its raw PDF bytes."""
+def _merchant_address_lines(merchant: MerchantConfig) -> list[str]:
+    lines = list(merchant.address_lines)
+    lines.extend(f"Phone: {phone}" for phone in merchant.phone_lines)
+    lines.append(f"Email: {merchant.email}")
+    if merchant.website:
+        lines.append(f"Website: {merchant.website}")
+    if merchant.tax_id:
+        lines.append(f"Tax ID: {merchant.tax_id}")
+    return lines
+
+
+def _bank_details(merchant: MerchantConfig) -> list[str]:
+    details = [
+        f"Bank: {merchant.bank_name}",
+        f"Account name: {merchant.bank_account_name}",
+        f"Account number: {merchant.bank_account_number}",
+    ]
+    if merchant.bank_branch:
+        details.append(f"Branch: {merchant.bank_branch}")
+    if merchant.bank_swift:
+        details.append(f"SWIFT/code: {merchant.bank_swift}")
+    return details
+
+
+def _commercial_terms(merchant: MerchantConfig, line_items: list) -> list[tuple[str, str]]:
+    item_types = {str(getattr(item, "item_type", "generic") or "generic").lower() for item in line_items}
+    rows = [
+        ("Delivery:", merchant.delivery_terms),
+        ("Quote Validity:", f"{merchant.validity_days} Days"),
+        ("Payment Terms:", merchant.payment_terms),
+        ("VAT/Tax:", merchant.vat_wording),
+    ]
+    if "equipment" in item_types:
+        if merchant.equipment_installation:
+            rows.append(("Equipment Installation:", merchant.equipment_installation))
+        if merchant.equipment_warranty:
+            rows.append(("Equipment Warranty:", merchant.equipment_warranty))
+    if item_types == {"consumable"} and merchant.consumables_warranty:
+        rows.append(("Consumables Warranty:", merchant.consumables_warranty))
+    if merchant.technical_support and "equipment" in item_types:
+        rows.append(("Technical Support:", merchant.technical_support))
+    return [(label, value) for label, value in rows if value]
+
+
+def generate_pfi_pdf(
+    rfq,
+    line_items: list,
+    merchant_config: MerchantConfig | None = None,
+) -> bytes:
+    """Build a complete PFI from stable line snapshots and validated configuration."""
     if not line_items:
         raise ValueError("at least one line item is required")
+    merchant = merchant_config or get_merchant_config()
+    if not merchant.is_complete:
+        missing = ", ".join((*merchant.missing_required_fields, *merchant.configuration_errors))
+        raise ValueError(f"merchant configuration is incomplete: {missing}")
 
-    resolved_terms = {**DEFAULT_TERMS, **(terms or {})}
-    currency = rfq.currency or "UGX"
+    currency = str(rfq.currency or "").strip().upper()
+    if not currency:
+        raise ValueError("RFQ currency is required")
+    for item in line_items:
+        if not isinstance(item.quantity, int) or item.quantity <= 0:
+            raise ValueError("every PFI line requires a valid quantity")
+        if not str(item.uom or "").strip():
+            raise ValueError("every PFI line requires a UoM")
+        if not isinstance(item.unit_price, int) or item.unit_price <= 0:
+            raise ValueError("every PFI line requires a persisted unit price")
+        if not isinstance(item.line_total, int) or item.line_total != item.unit_price * item.quantity:
+            raise ValueError("every PFI line requires a valid persisted line total")
     styles = getSampleStyleSheet()
     address_style = ParagraphStyle(
         "address",
@@ -172,14 +208,14 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
         "zelus_name",
         parent=styles["Normal"],
         fontSize=18,
-        textColor=ZELUS_NAVY,
+        textColor=PFI_NAVY,
         leading=22,
     )
     tagline_style = ParagraphStyle(
         "tagline",
         parent=styles["Normal"],
         fontSize=9,
-        textColor=ZELUS_NAVY,
+        textColor=PFI_NAVY,
         leading=12,
     )
     cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8.5, leading=10.5)
@@ -199,13 +235,27 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
     letterhead = Table(
         [
             [
-                Paragraph(f"<b>{ZELUS_LETTERHEAD['name']}</b>", name_style),
+                Paragraph(f"<b>{escape(merchant.display_name)}</b>", name_style),
                 Paragraph(
-                    "<br/>".join(escape(line) for line in ZELUS_LETTERHEAD["address_lines"]),
+                    "<br/>".join(escape(line) for line in _merchant_address_lines(merchant)),
                     address_style,
                 ),
             ],
-            [Paragraph(f"<i>{escape(ZELUS_LETTERHEAD['tagline'])}</i>", tagline_style), ""],
+            [
+                Paragraph(
+                    "<br/>".join(
+                        filter(
+                            None,
+                            (
+                                f"<i>{escape(merchant.tagline)}</i>" if merchant.tagline else "",
+                                f"Legal seller: {escape(merchant.legal_name)}",
+                            ),
+                        )
+                    ),
+                    tagline_style,
+                ),
+                "",
+            ],
         ],
         colWidths=[90 * mm, 86 * mm],
     )
@@ -214,7 +264,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
             [
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("SPAN", (1, 0), (1, 1)),
-                ("LINEBELOW", (0, 1), (-1, 1), 1.2, ZELUS_NAVY),
+                ("LINEBELOW", (0, 1), (-1, 1), 1.2, PFI_NAVY),
                 ("BOTTOMPADDING", (0, 1), (-1, 1), 8),
                 ("TOPPADDING", (0, 0), (-1, -1), 0),
             ]
@@ -233,7 +283,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
         [
             ["PFI NUMBER:", rfq.pfi_reference or "-"],
             ["Date:", issue_date.strftime("%d %b %Y")],
-            ["Quotation Validity:", f"{resolved_terms['validity_days']} Days"],
+            ["Quotation Validity:", f"{merchant.validity_days} Days"],
             ["RFQ No:", f"#{rfq.id}"],
         ],
         colWidths=[38 * mm, 48 * mm],
@@ -245,7 +295,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("BACKGROUND", (0, 0), (0, -1), ZELUS_TINT),
+                ("BACKGROUND", (0, 0), (0, -1), PFI_TINT),
             ]
         )
     )
@@ -284,19 +334,11 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
 
     rows = [["S.No", "Item Description", "Qty", "Unit Price", "Total Price"]]
     grand_total = 0
-    all_lines_totalled = True
     for index, item in enumerate(line_items, start=1):
         line_total = item.line_total
-        if line_total is None and item.unit_price is not None:
-            line_total = item.unit_price * item.quantity
-
-        unit_price_text = f"{currency} {item.unit_price:,}" if item.unit_price is not None else "TBC"
-        if line_total is None:
-            total_price_text = "TBC"
-            all_lines_totalled = False
-        else:
-            total_price_text = f"{currency} {line_total:,}"
-            grand_total += line_total
+        unit_price_text = f"{currency} {item.unit_price:,}"
+        total_price_text = f"{currency} {line_total:,}"
+        grand_total += line_total
 
         rows.append(
             [
@@ -317,7 +359,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
         TableStyle(
             [
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-                ("BACKGROUND", (0, 0), (-1, 0), ZELUS_NAVY),
+                ("BACKGROUND", (0, 0), (-1, 0), PFI_NAVY),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("FONTSIZE", (0, 0), (-1, -1), 8.5),
@@ -325,7 +367,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
                 ("ALIGN", (2, 0), (2, -1), "CENTER"),
                 ("ALIGN", (3, 0), (4, -1), "RIGHT"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZELUS_TINT]),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PFI_TINT]),
                 ("TOPPADDING", (0, 0), (-1, -1), 4),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]
@@ -334,7 +376,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
     story.append(items_table)
 
     total_table = Table(
-        [["TOTAL", currency, f"{grand_total:,}" if all_lines_totalled else "See TBC lines above"]],
+        [["TOTAL", currency, f"{grand_total:,}"]],
         colWidths=[68 * mm, 20 * mm, 88 * mm],
     )
     total_table.setStyle(
@@ -353,25 +395,14 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
     )
     story.append(total_table)
 
-    if all_lines_totalled:
-        amount_note = f"<b>Amount in words:</b> {amount_in_words(grand_total)} Only"
-        amount_style = ParagraphStyle(
-            "amount_words",
-            parent=styles["Normal"],
-            fontSize=9.5,
-            spaceBefore=5,
-            spaceAfter=6,
-        )
-    else:
-        amount_note = "One or more items are pending a unit price. A final total will follow once quoted."
-        amount_style = ParagraphStyle(
-            "amount_pending",
-            parent=styles["Normal"],
-            fontSize=9,
-            textColor=colors.grey,
-            spaceBefore=5,
-            spaceAfter=6,
-        )
+    amount_note = f"<b>Amount in words:</b> {amount_in_words(grand_total)} Only"
+    amount_style = ParagraphStyle(
+        "amount_words",
+        parent=styles["Normal"],
+        fontSize=9.5,
+        spaceBefore=5,
+        spaceAfter=6,
+    )
     story.append(Paragraph(amount_note, amount_style))
     story.append(
         Paragraph(
@@ -387,14 +418,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
         )
     )
 
-    terms_rows = [
-        ["Delivery:", resolved_terms["delivery"]],
-        ["Quote Validity:", f"{resolved_terms['validity_days']} Days"],
-        ["Payment Terms:", resolved_terms["payment_terms"]],
-        ["Installation:", resolved_terms["installation"]],
-        ["Warranty:", resolved_terms["warranty"]],
-        ["Technical Backup:", resolved_terms["technical_backup"]],
-    ]
+    terms_rows = _commercial_terms(merchant, line_items)
     terms_table = Table(
         [
             [
@@ -416,7 +440,7 @@ def generate_pfi_pdf(rfq, line_items: list, terms: dict | None = None) -> bytes:
         )
     )
     bank_table = Table(
-        [["BANK DETAILS"]] + [[line] for line in ZELUS_LETTERHEAD["bank_details"]],
+        [["BANK DETAILS"]] + [[line] for line in _bank_details(merchant)],
         colWidths=[86 * mm],
     )
     bank_table.setStyle(

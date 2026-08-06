@@ -11,6 +11,7 @@ class ConversationState(str, Enum):
     SELECTING_PRODUCT = "SELECTING_PRODUCT"
     VIEWING_PRICE = "VIEWING_PRICE"
     RFQ_FLOW = "RFQ_FLOW"
+    QUALIFYING_INTENT = "QUALIFYING_INTENT"
     DIRECT_RFQ = "DIRECT_RFQ"
     TALK_TO_AGENT = "TALK_TO_AGENT"
     IDLE = "IDLE"
@@ -26,6 +27,7 @@ STATE_DESCRIPTIONS = {
     ConversationState.SELECTING_PRODUCT.value: "awaiting quantity for selected offer",
     ConversationState.VIEWING_PRICE.value: "awaiting next action after pricing view",
     ConversationState.RFQ_FLOW.value: "awaiting facility and location for RFQ",
+    ConversationState.QUALIFYING_INTENT.value: "awaiting structured procurement stage",
     ConversationState.DIRECT_RFQ.value: "awaiting direct RFQ pipe-format input",
     ConversationState.TALK_TO_AGENT.value: "awaiting sales handoff details",
     ConversationState.IDLE.value: "no active conversation",

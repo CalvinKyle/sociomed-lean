@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 FALLBACK_MESSAGE = (
     "Sorry, I could not complete that request right now. Your message has not been ignored. "
-    "Please try again shortly, or reply 4 from the main menu to contact sales."
+    "Please try again shortly, or reply 3 from the main menu to contact sales."
 )
 
 

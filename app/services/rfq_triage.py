@@ -2,7 +2,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from app.services.search import find_products, get_results, resolve_unit_price
+from app.services.search import find_products, get_results
+from app.services.pricing import resolve_price_for_quantity
 
 
 BULK_MATCH_THRESHOLD = 3
@@ -17,6 +18,7 @@ class DirectRFQPayload:
     quantity: int
     organization: str
     delivery_location: str
+    procurement_stage: str
     source: str
     notes: Optional[str] = None
     is_bulk: bool = False
@@ -26,6 +28,8 @@ class DirectRFQPayload:
 
 def split_requested_items(item_text: str) -> list[str]:
     normalized = re.sub(r"\s+", " ", item_text.strip())
+    if re.fullmatch(r".+?,\s*\d+\s+[A-Za-z][A-Za-z -]*", normalized):
+        return [normalized]
     parts = re.split(r"\s*(?:,|;|\+|\n|\band\b)\s*", normalized, flags=re.IGNORECASE)
     return [part.strip(" .") for part in parts if part.strip(" .")]
 
@@ -83,16 +87,39 @@ def resolve_bulk_line_items(
         product = matches[0]
         offers = get_results(product["product_id"], data, currency=currency)
         best_offer = offers[0] if offers else None
+        price_resolution = (
+            resolve_price_for_quantity(best_offer.get("pricing", []), quantity, currency)
+            if best_offer
+            else None
+        )
+        if best_offer and best_offer.get("is_own_inventory"):
+            stock_status = (
+                "verified_in_stock"
+                if isinstance(best_offer.get("stock_qty"), int) and best_offer["stock_qty"] >= quantity
+                else "insufficient_stock"
+                if (best_offer.get("stock_qty") or 0) > 0
+                else "out_of_stock"
+            )
+        else:
+            stock_status = "partner_confirmation_required" if best_offer else "unknown"
         resolved.append(
             {
+                "inventory_id": best_offer.get("inventory_id") if best_offer else None,
                 "product_id": product["product_id"],
                 "product_name": product["name"],
+                "brand": best_offer.get("brand") if best_offer else None,
+                "sku": best_offer.get("sku") if best_offer else None,
+                "item_type": product.get("item_type") or "generic",
                 "vendor_id": best_offer.get("vendor_id") if best_offer else None,
                 "vendor_name": best_offer.get("vendor_name") if best_offer else None,
                 "vendor_phone": best_offer.get("vendor_phone") if best_offer else None,
+                "is_own_inventory": bool(best_offer and best_offer.get("is_own_inventory")),
                 "quantity": quantity,
                 "uom": best_offer.get("uom") if best_offer else None,
-                "unit_price": resolve_unit_price(best_offer, quantity) if best_offer else None,
+                "unit_price": price_resolution.unit_price if price_resolution and price_resolution.eligible else None,
+                "currency": currency,
+                "price_source": price_resolution.pricing_id if price_resolution and price_resolution.eligible else None,
+                "stock_verification_status": stock_status,
             }
         )
     return resolved
@@ -121,8 +148,31 @@ def _bulk_notes(items: list[str], original_text: str) -> str:
 
 def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
     parts = _split_pipe_message(text)
+    if len(parts) in {4, 5} and is_bulk_request(parts[1]):
+        buyer_name, item_text, facility, location = parts[:4]
+        procurement_stage = normalize_procurement_stage(parts[4]) if len(parts) == 5 else "market_sourcing"
+        if not procurement_stage:
+            return None
+        items = split_requested_items(item_text)
+        return DirectRFQPayload(
+            buyer_name=buyer_name,
+            product_name=_bulk_product_name(items),
+            quantity=len(items),
+            organization=facility,
+            delivery_location=location,
+            procurement_stage=procurement_stage,
+            source="whatsapp_bulk_rfq",
+            notes=_bulk_notes(items, text),
+            is_bulk=True,
+            item_count=len(items),
+            requested_items=tuple(items),
+        )
+
     if len(parts) >= 5:
         buyer_name, item_text, quantity_text, facility, location = parts[:5]
+        procurement_stage = normalize_procurement_stage(parts[5]) if len(parts) >= 6 else "market_sourcing"
+        if not procurement_stage:
+            return None
         try:
             quantity = int(quantity_text)
         except ValueError:
@@ -136,6 +186,7 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
                 quantity=max(quantity, len(items)),
                 organization=facility,
                 delivery_location=location,
+                procurement_stage=procurement_stage,
                 source="whatsapp_bulk_rfq",
                 notes=_bulk_notes(items, text),
                 is_bulk=True,
@@ -149,28 +200,41 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
             quantity=quantity,
             organization=facility,
             delivery_location=location,
+            procurement_stage=procurement_stage,
             source="whatsapp_direct_rfq",
             notes="Generic RFQ from main menu",
             requested_items=(item_text,),
         )
 
-    if len(parts) == 4 and is_bulk_request(parts[1]):
-        buyer_name, item_text, facility, location = parts
-        items = split_requested_items(item_text)
-        return DirectRFQPayload(
-            buyer_name=buyer_name,
-            product_name=_bulk_product_name(items),
-            quantity=len(items),
-            organization=facility,
-            delivery_location=location,
-            source="whatsapp_bulk_rfq",
-            notes=_bulk_notes(items, text),
-            is_bulk=True,
-            item_count=len(items),
-            requested_items=tuple(items),
-        )
-
     return None
+
+
+PROCUREMENT_STAGE_ALIASES = {
+    "1": "budgeting",
+    "budget": "budgeting",
+    "budgeting": "budgeting",
+    "market research": "budgeting",
+    "2": "approval_stage",
+    "approval": "approval_stage",
+    "awaiting approval": "approval_stage",
+    "approval stage": "approval_stage",
+    "approval_stage": "approval_stage",
+    "3": "ready_to_purchase",
+    "ready": "ready_to_purchase",
+    "ready to purchase": "ready_to_purchase",
+    "ready_to_purchase": "ready_to_purchase",
+    "4": "tender",
+    "tender": "tender",
+    "5": "market_sourcing",
+    "market sourcing": "market_sourcing",
+    "market_sourcing": "market_sourcing",
+    "sourcing": "market_sourcing",
+}
+
+
+def normalize_procurement_stage(value: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return PROCUREMENT_STAGE_ALIASES.get(normalized)
 
 
 def format_ambiguous_match_message(matches: list[Dict]) -> str:

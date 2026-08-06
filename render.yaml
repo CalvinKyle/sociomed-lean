@@ -1,15 +1,13 @@
 services:
   - type: web
     name: sociomed-lean
-    env: docker
-    region: us-east
+    runtime: docker
+    region: virginia
     plan: standard
-    
+    branch: august_launch
+    autoDeployTrigger: off
     healthCheckPath: /api/health/liveness
-    healthCheckInterval: 30
-    
-    autoDeploy: false
-    
+    preDeployCommand: alembic upgrade head
     envVars:
       - key: APP_ENV
         value: production
@@ -17,6 +15,16 @@ services:
         value: INFO
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: LAUNCH_MODE
+        value: "true"
+      - key: ENABLE_FEATURED_OFFERS
+        value: "false"
+      - key: ENABLE_CATEGORY_BROWSE
+        value: "false"
+      - key: ENABLE_RELATED_PRODUCTS
+        value: "false"
+      - key: EXPOSE_SUPPLIER_NAMES
+        value: "false"
       - key: VERIFY_TOKEN
         sync: false
       - key: WHATSAPP_TOKEN
@@ -28,48 +36,86 @@ services:
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
-        value: sales@socio-med.com
+        sync: false
       - key: PUBLIC_BASE_URL
-        value: https://api.socio-med.com
+        sync: false
       - key: ENABLE_OPEN_DOCS
         value: "false"
       - key: API_KEY
         sync: false
-      - key: GOOGLE_CREDS_FILE
-        value: .secrets/google-service-account.json
       - key: GOOGLE_CREDS_JSON
         sync: false
       - key: SHEET_NAME
         value: sociomed_db
       - key: DATABASE_URL
-        fromService:
+        fromDatabase:
           name: sociomed-postgres
-          type: pgsql
           property: connectionString
-      - key: REDIS_HOST
+      - key: REDIS_URL
         fromService:
           name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
+          type: keyvalue
+          property: connectionString
       - key: CACHE_TTL_SECONDS
         value: "300"
       - key: SESSION_TTL
         value: "1800"
+      - key: SESSION_VERSION
+        value: "2"
       - key: DEFAULT_CURRENCY
         value: UGX
-
-  # render.yaml — replace the Celery worker block
+      - key: MAX_AUTO_PFI_LEAD_TIME_DAYS
+        value: "0"
+      - key: MERCHANT_LEGAL_NAME
+        sync: false
+      - key: MERCHANT_TRADING_NAME
+        sync: false
+      - key: MERCHANT_TAGLINE
+        sync: false
+      - key: MERCHANT_ADDRESS_LINES_JSON
+        sync: false
+      - key: MERCHANT_PHONE_LINES_JSON
+        sync: false
+      - key: MERCHANT_EMAIL
+        sync: false
+      - key: MERCHANT_WEBSITE
+        sync: false
+      - key: MERCHANT_TAX_ID
+        sync: false
+      - key: MERCHANT_VAT_WORDING
+        sync: false
+      - key: MERCHANT_BANK_NAME
+        sync: false
+      - key: MERCHANT_BANK_ACCOUNT_NAME
+        sync: false
+      - key: MERCHANT_BANK_ACCOUNT_NUMBER
+        sync: false
+      - key: MERCHANT_BANK_BRANCH
+        sync: false
+      - key: MERCHANT_BANK_SWIFT
+        sync: false
+      - key: PFI_VALIDITY_DAYS
+        value: "14"
+      - key: PFI_PAYMENT_TERMS
+        sync: false
+      - key: PFI_DELIVERY_TERMS
+        sync: false
+      - key: PFI_CONSUMABLES_WARRANTY
+        sync: false
+      - key: PFI_EQUIPMENT_WARRANTY
+        sync: false
+      - key: PFI_EQUIPMENT_INSTALLATION
+        sync: false
+      - key: PFI_TECHNICAL_SUPPORT
+        sync: false
 
   - type: worker
     name: sociomed-lean-celery-worker
-    env: python
-    region: us-east
+    runtime: python
+    region: virginia
     plan: starter
+    branch: august_launch
+    autoDeployTrigger: off
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
     envVars:
@@ -77,6 +123,8 @@ services:
         value: production
       - key: LOG_LEVEL
         value: INFO
+      - key: LAUNCH_MODE
+        value: "true"
       - key: WHATSAPP_TOKEN
         sync: false
       - key: PHONE_NUMBER_ID
@@ -86,91 +134,61 @@ services:
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
-        value: sales@socio-med.com
+        sync: false
       - key: PUBLIC_BASE_URL
-        value: https://api.socio-med.com
+        sync: false
       - key: DEFAULT_CURRENCY
         value: UGX
       - key: DATABASE_URL
-        fromService:
+        fromDatabase:
           name: sociomed-postgres
-          type: pgsql
           property: connectionString
-      - key: REDIS_HOST
+      - key: REDIS_URL
         fromService:
           name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
-
-  - type: worker
-    name: sociomed-lean-celery-beat
-    env: python
-    region: us-east
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app beat --loglevel=info
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: LOG_LEVEL
-        value: INFO
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: PHONE_NUMBER_ID
-        sync: false
-      - key: SALES_AGENT_PHONE
-        sync: false
-      - key: DATABASE_URL
-        fromService:
-          name: sociomed-postgres
-          type: pgsql
+          type: keyvalue
           property: connectionString
-      - key: REDIS_HOST
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
+      - key: MERCHANT_LEGAL_NAME
+        sync: false
+      - key: MERCHANT_TRADING_NAME
+        sync: false
+      - key: MERCHANT_ADDRESS_LINES_JSON
+        sync: false
+      - key: MERCHANT_PHONE_LINES_JSON
+        sync: false
+      - key: MERCHANT_EMAIL
+        sync: false
+      - key: MERCHANT_VAT_WORDING
+        sync: false
+      - key: MERCHANT_BANK_NAME
+        sync: false
+      - key: MERCHANT_BANK_ACCOUNT_NAME
+        sync: false
+      - key: MERCHANT_BANK_ACCOUNT_NUMBER
+        sync: false
+      - key: PFI_VALIDITY_DAYS
+        value: "14"
+      - key: PFI_PAYMENT_TERMS
+        sync: false
+      - key: PFI_DELIVERY_TERMS
+        sync: false
+      - key: PFI_CONSUMABLES_WARRANTY
+        sync: false
+      - key: PFI_EQUIPMENT_WARRANTY
+        sync: false
+      - key: PFI_EQUIPMENT_INSTALLATION
+        sync: false
+      - key: PFI_TECHNICAL_SUPPORT
+        sync: false
 
-  # ── Flower Monitoring Dashboard (added)
-  - type: web
-    name: sociomed-lean-flower
-    env: python
-    region: us-east
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app flower --address=0.0.0.0 --port=$PORT --basic-auth=admin:$FLOWER_PASSWORD
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: REDIS_HOST
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
-      - key: FLOWER_PASSWORD
-        sync: false   # Set this manually in Render dashboard (strong password)
-
-  - type: redis
+  - type: keyvalue
     name: sociomed-redis
-    region: us-east
-    plan: free
+    region: virginia
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
 
-  - type: pgsql
-    name: sociomed-postgres
-    region: us-east
-    plan: free   # change to starter when you go live
+databases:
+  - name: sociomed-postgres
+    region: virginia
+    plan: basic-256mb
