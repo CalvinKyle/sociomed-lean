@@ -1,9 +1,11 @@
 # SocioMed Environments
 
-This repo now supports two safe environment patterns:
+This repo supports two safe environment patterns:
 
 - Local machines: `.env.local` plus a local Google credentials file in `.secrets/`
 - Production: environment variables only, including `GOOGLE_CREDS_JSON`
+
+Real Twilio, Meta, Google, database, and application secrets must never be committed to git.
 
 ## 1. Shared Identity
 
@@ -12,28 +14,54 @@ Set these in every environment:
 | Variable | Local value | Production value | Notes |
 | --- | --- | --- | --- |
 | `APP_ENV` | `development` | `production` | Production turns on stricter startup validation. |
-| `PUBLIC_BASE_URL` | `http://localhost:8000` | `https://api.socio-med.com` | Use your Render URL first if the custom domain is not live yet. |
+| `PUBLIC_BASE_URL` | `http://localhost:8000` | Your public HTTPS Render URL | Use the Render URL first if the custom domain is not live yet. |
 | `SUPPORT_EMAIL` | `sales@socio-med.com` | `sales@socio-med.com` | Buyer-facing contact. |
-| `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 ops number | This is where buyer leads and RFQs are forwarded. |
+| `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 operations number | Buyer leads and RFQs are forwarded here. |
 | `DEFAULT_CURRENCY` | `UGX` | `UGX` | Buyer phone prefixes still override this where supported. |
 | `ENABLE_OPEN_DOCS` | `true` | `false` | Keep docs off in production. |
-| `API_KEY` | `sociomed-local-api-key` | Strong random secret | Required for `/`, detailed `/api/health`, leads, RFQs, and RFQ status updates. The liveness check, public catalog, and Meta webhook endpoints do not require it. |
-| `LOG_LEVEL` | `INFO` | `INFO` | Raise to `DEBUG` only when actively troubleshooting. |
+| `API_KEY` | `sociomed-local-api-key` | Strong random secret | Required for protected API and health endpoints. |
+| `LOG_LEVEL` | `INFO` | `INFO` | Raise to `DEBUG` only while troubleshooting. |
 
-## 2. Meta WhatsApp Cloud API
+## 2. Select the WhatsApp Provider
 
-These power `/api/webhook` and all outbound WhatsApp notifications:
+Set one value:
+
+| Variable | Value |
+| --- | --- |
+| `WHATSAPP_PROVIDER` | `twilio` for the Twilio Sandbox beta or `meta` for Meta Cloud API |
+
+Production validation only requires credentials for the selected provider. The web service and every Celery process that sends WhatsApp messages must use the same provider.
+
+## 3. Twilio WhatsApp Beta
+
+These power `/api/webhook/twilio`, outbound WhatsApp messages, request validation, and delivery callbacks:
 
 | Variable | Value to set |
 | --- | --- |
-| `VERIFY_TOKEN` | `sociomed-local-webhook` locally and `sociomed-prod-webhook` in production |
-| `WHATSAPP_TOKEN` | Paste the permanent Meta system-user token |
-| `PHONE_NUMBER_ID` | Paste the Meta WhatsApp phone number ID |
-| `WHATSAPP_APP_SECRET` | Paste the Meta app secret used for webhook signature validation |
+| `TWILIO_ACCOUNT_SID` | Twilio Account SID beginning with `AC` |
+| `TWILIO_AUTH_TOKEN` | Primary Twilio Auth Token; store only in `.env.local` or Render |
+| `TWILIO_WHATSAPP_FROM` | Exact Sandbox or approved sender, including `whatsapp:` |
+| `TWILIO_WEBHOOK_URL` | Exact public URL ending in `/api/webhook/twilio` |
+| `TWILIO_STATUS_CALLBACK_URL` | Recommended public URL ending in `/api/webhook/twilio/status` |
 
-The webhook URL should be `https://api.socio-med.com/api/webhook` once production is live.
+The webhook URL configured in Twilio and `TWILIO_WEBHOOK_URL` must match exactly because Twilio signs the complete URL and all form parameters.
 
-## 3. Google Sheets Sync
+Follow [TWILIO_BETA.md](TWILIO_BETA.md) for the Console, Sandbox, Render, deployment, and smoke-test sequence.
+
+## 4. Meta WhatsApp Cloud API
+
+These power `/api/webhook` and Meta outbound notifications when `WHATSAPP_PROVIDER=meta`:
+
+| Variable | Value to set |
+| --- | --- |
+| `VERIFY_TOKEN` | A private webhook verification value |
+| `WHATSAPP_TOKEN` | Permanent Meta system-user token |
+| `PHONE_NUMBER_ID` | Meta WhatsApp phone number ID |
+| `WHATSAPP_APP_SECRET` | Meta app secret used for webhook signature validation |
+
+The Meta webhook URL is `https://YOUR-HOST/api/webhook`.
+
+## 5. Google Sheets Sync
 
 Use one of these, not both:
 
@@ -41,17 +69,13 @@ Use one of these, not both:
   - `GOOGLE_CREDS_FILE=.secrets/google-service-account.json`
   - Put the downloaded Google service account JSON file at `.secrets/google-service-account.json`
 - Production:
-  - `GOOGLE_CREDS_JSON=` and paste the full service-account JSON as a single-line value
+  - Set `GOOGLE_CREDS_JSON` to the full service-account JSON as a single-line Render secret
 
-Use:
+Use `SHEET_NAME=sociomed_db` in both environments.
 
-- `SHEET_NAME=sociomed_db`
+## 6. Data Layer
 
-That keeps the sync script consistent on your laptop, VS Code, Codex, and Render shell sessions.
-
-## 4. Data Layer
-
-Use the same database and Redis instance for the web service and the Celery worker:
+Use the same database and Redis instance for the web service and Celery worker:
 
 | Variable | Local value | Production value |
 | --- | --- | --- |
@@ -64,65 +88,67 @@ Use the same database and Redis instance for the web service and the Celery work
 | `DB_MAX_OVERFLOW` | `10` | Temporary extra DB connections |
 | `DB_POOL_RECYCLE_SECONDS` | `300` | Recycle stale DB connections |
 
-The app now preserves Redis credentials from `REDIS_URL`, which matters for managed Redis services.
-
 Health checks serve two distinct purposes:
 
-- `GET /api/health/liveness` is unauthenticated and returns only `{"status": "ok"}`. Render and Docker use it to determine whether the API process is up.
-- `GET /api/health` requires `X-API-Key` and reports detailed database, Redis, and Google Sheets credential checks for human and operations use.
+- `GET /api/health/liveness` is unauthenticated and returns only `{"status": "ok"}`.
+- `GET /api/health` requires `X-API-Key` and reports database, Redis, and Google Sheets credential checks.
 
 Exchange rates can be overridden without a deploy:
 
 | Variable | Example |
 | --- | --- |
 | `EXCHANGE_RATES_JSON` | `{"KES":0.029,"RWF":0.36}` |
-| `EXCHANGE_RATES_LAST_UPDATED` | `2026-04-30` |
+| `EXCHANGE_RATES_LAST_UPDATED` | Current source date in `YYYY-MM-DD` format |
 | `MAX_EXCHANGE_RATE_AGE_DAYS` | `14` |
 
-If `EXCHANGE_RATES_JSON` is not set, the app uses conservative static fallback rates from code and treats freshness based on `EXCHANGE_RATES_LAST_UPDATED`.
+## 7. Render Services
 
-## 5. Render Services
-
-You need three services:
+The blueprint defines these services:
 
 1. `sociomed-lean` web API
-2. `sociomed-lean-celery-worker` Celery worker
-3. `sociomed-lean-flower` optional monitoring dashboard
+2. `sociomed-lean-celery-worker` message worker
+3. `sociomed-lean-celery-beat` scheduled jobs
+4. `sociomed-lean-flower` optional monitoring dashboard
 
-Important production rule:
+Important production rules:
 
-- The worker must receive the same WhatsApp, Postgres, Redis, and sales-routing variables as the web service.
+- The web service and Celery worker must share Twilio or Meta credentials, Postgres, Redis, and sales-routing values.
+- The Celery beat service also needs outbound provider credentials if scheduled WhatsApp digests are enabled.
+- `render.yaml` uses `sync: false` for secrets, so add the real values in the Render Environment page.
+- `autoDeploy` is disabled for the web service; deploy the updated service manually after changing code or environment variables.
 
-That mismatch was a deploy blocker before this update; it is now reflected in [render.yaml](../render.yaml).
+## 8. Cross-Device Workflow
 
-## 6. Cross-Device Workflow
+Use this pattern so your laptop, VS Code, Codex, and Render stay in sync without copying secrets through git:
 
-Use this pattern so your laptop, VS Code, and Codex stay in sync without copying secrets through git:
-
-1. Keep code in git.
+1. Keep code and placeholder examples in git.
 2. Keep local secrets in `.env.local` and `.secrets/`.
 3. Keep production secrets in Render.
-4. Keep the authoritative secret values in one shared vault outside the repo.
-5. Never commit `.env*`, `.secrets/`, or `credentials.json`.
+4. Keep authoritative secret values in a password manager or secret vault outside the repo.
+5. Never commit `.env.local`, `.secrets/`, credential JSON, Auth Tokens, or API keys.
+6. Rotate any credential immediately if it is exposed in git, logs, screenshots, or chat.
 
-## 7. Fastest Production Sequence
+## 9. Fastest Twilio Beta Sequence
 
-1. Fill in [.env.production.example](../.env.production.example) with the real production values.
-2. Mirror those values into Render for both the web service and the worker.
-3. Deploy the API and worker.
+1. Merge or deploy the Twilio integration branch.
+2. Add the real Twilio values to Render for the web service and Celery worker.
+3. Deploy the web service and worker.
 4. Run `alembic upgrade head`.
-5. Run `python3 sync_sheets_to_db.py --dry-run` against production once the Google credentials are in place.
-6. Run `python3 sync_sheets_to_db.py` after the dry-run row counts look correct.
-7. Verify public `/api/health/liveness`, detailed `/api/health` with `X-API-Key`, public `/api/catalog/featured`, public `/api/catalog/search?q=gloves`, authenticated `POST /api/leads`, authenticated `POST /api/rfqs`, and the Meta webhook verification flow.
-8. Point Meta at `https://api.socio-med.com/api/webhook`.
+5. Load the catalog with `python3 sync_sheets_to_db.py`.
+6. Join each tester to the Twilio WhatsApp Sandbox.
+7. Point the Twilio Sandbox `When a message comes in` URL to `/api/webhook/twilio` using `POST`.
+8. Verify `/api/health/liveness` and send `hello` from a joined WhatsApp tester.
+9. Complete a product search and test RFQ to confirm the full flow.
 
-## 8. Local Machine Bootstrap
+## 10. Local Machine Bootstrap
 
 1. Copy [.env.example](../.env.example) to `.env.local`.
-2. Create `.secrets/google-service-account.json`.
-3. Start local Postgres and Redis.
-4. Run `pip install -r requirements.txt`.
-5. Run `alembic upgrade head`.
-6. Run `python3 sync_sheets_to_db.py`.
-7. Start the API with `uvicorn app.main:app --reload`.
-8. Start the worker with `celery -A app.core.celery_app worker --loglevel=info`.
+2. Add real local Twilio values only to `.env.local`.
+3. Create `.secrets/google-service-account.json`.
+4. Start local Postgres and Redis.
+5. Run `pip install -r requirements.txt`.
+6. Run `alembic upgrade head`.
+7. Run `python3 sync_sheets_to_db.py`.
+8. Start the API with `uvicorn app.main:app --reload`.
+9. Start the worker with `celery -A app.core.celery_app worker --loglevel=info`.
+10. For local Twilio testing, expose port 8000 with ngrok and use the exact HTTPS URL in `.env.local` and Twilio Sandbox settings.
