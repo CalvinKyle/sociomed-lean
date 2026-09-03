@@ -8,10 +8,16 @@ from app.core import config as config_module
 def _reload_config(monkeypatch, **env):
     managed_keys = {
         "APP_ENV",
+        "WHATSAPP_PROVIDER",
         "VERIFY_TOKEN",
         "WHATSAPP_TOKEN",
         "PHONE_NUMBER_ID",
         "WHATSAPP_APP_SECRET",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_WHATSAPP_FROM",
+        "TWILIO_WEBHOOK_URL",
+        "TWILIO_STATUS_CALLBACK_URL",
         "GOOGLE_CREDS_FILE",
         "GOOGLE_CREDS_JSON",
         "SHEET_NAME",
@@ -97,3 +103,51 @@ def test_validate_config_requires_whatsapp_and_public_routing_in_production(monk
     assert "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE" in message
     assert "PUBLIC_BASE_URL" in message
     assert "API_KEY" in message
+
+
+def test_validate_config_requires_twilio_credentials_when_twilio_is_selected(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        WHATSAPP_PROVIDER="twilio",
+        DATABASE_URL="sqlite:///./test.db",
+        REDIS_HOST="localhost",
+        GOOGLE_CREDS_JSON="{}",
+        SALES_AGENT_PHONE="+256700222222",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        API_KEY="secret",
+        TWILIO_ACCOUNT_SID="",
+        TWILIO_AUTH_TOKEN="",
+        TWILIO_WHATSAPP_FROM="",
+        TWILIO_WEBHOOK_URL="",
+    )
+
+    with pytest.raises(Exception) as exc:
+        config.validate_config()
+
+    message = str(exc.value)
+    assert "TWILIO_ACCOUNT_SID" in message
+    assert "TWILIO_AUTH_TOKEN" in message
+    assert "TWILIO_WHATSAPP_FROM" in message
+    assert "TWILIO_WEBHOOK_URL" in message
+    assert "VERIFY_TOKEN" not in message
+
+
+def test_validate_config_accepts_complete_twilio_production_settings(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        WHATSAPP_PROVIDER="twilio",
+        DATABASE_URL="sqlite:///./test.db",
+        REDIS_HOST="localhost",
+        GOOGLE_CREDS_JSON="{}",
+        SALES_AGENT_PHONE="+256700222222",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        API_KEY="secret",
+        TWILIO_ACCOUNT_SID="AC123",
+        TWILIO_AUTH_TOKEN="auth-token",
+        TWILIO_WHATSAPP_FROM="whatsapp:+14155238886",
+        TWILIO_WEBHOOK_URL="https://sociomed-beta.onrender.com/api/webhook/twilio",
+    )
+
+    config.validate_config()
