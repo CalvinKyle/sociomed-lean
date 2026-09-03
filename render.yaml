@@ -4,12 +4,12 @@ services:
     env: docker
     region: us-east
     plan: standard
-    
+
     healthCheckPath: /api/health/liveness
     healthCheckInterval: 30
-    
+
     autoDeploy: false
-    
+
     envVars:
       - key: APP_ENV
         value: production
@@ -17,20 +17,24 @@ services:
         value: INFO
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: VERIFY_TOKEN
+      - key: WHATSAPP_PROVIDER
+        value: twilio
+      - key: TWILIO_ACCOUNT_SID
         sync: false
-      - key: WHATSAPP_TOKEN
+      - key: TWILIO_AUTH_TOKEN
         sync: false
-      - key: PHONE_NUMBER_ID
+      - key: TWILIO_WHATSAPP_FROM
         sync: false
-      - key: WHATSAPP_APP_SECRET
+      - key: TWILIO_WEBHOOK_URL
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
         sync: false
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
         value: sales@socio-med.com
       - key: PUBLIC_BASE_URL
-        value: https://api.socio-med.com
+        sync: false
       - key: ENABLE_OPEN_DOCS
         value: "false"
       - key: API_KEY
@@ -63,8 +67,6 @@ services:
       - key: DEFAULT_CURRENCY
         value: UGX
 
-  # render.yaml — replace the Celery worker block
-
   - type: worker
     name: sociomed-lean-celery-worker
     env: python
@@ -77,18 +79,24 @@ services:
         value: production
       - key: LOG_LEVEL
         value: INFO
-      - key: WHATSAPP_TOKEN
+      - key: WHATSAPP_PROVIDER
+        value: twilio
+      - key: TWILIO_ACCOUNT_SID
         sync: false
-      - key: PHONE_NUMBER_ID
+      - key: TWILIO_AUTH_TOKEN
         sync: false
-      - key: WHATSAPP_APP_SECRET
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: TWILIO_WEBHOOK_URL
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
         sync: false
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
         value: sales@socio-med.com
       - key: PUBLIC_BASE_URL
-        value: https://api.socio-med.com
+        sync: false
       - key: DEFAULT_CURRENCY
         value: UGX
       - key: DATABASE_URL
@@ -119,9 +127,15 @@ services:
         value: production
       - key: LOG_LEVEL
         value: INFO
-      - key: WHATSAPP_TOKEN
+      - key: WHATSAPP_PROVIDER
+        value: twilio
+      - key: TWILIO_ACCOUNT_SID
         sync: false
-      - key: PHONE_NUMBER_ID
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
         sync: false
       - key: SALES_AGENT_PHONE
         sync: false
@@ -141,7 +155,6 @@ services:
           type: redis
           property: port
 
-  # ── Flower Monitoring Dashboard (added)
   - type: web
     name: sociomed-lean-flower
     env: python
@@ -163,7 +176,7 @@ services:
           type: redis
           property: port
       - key: FLOWER_PASSWORD
-        sync: false   # Set this manually in Render dashboard (strong password)
+        sync: false
 
   - type: redis
     name: sociomed-redis
@@ -173,4 +186,4 @@ services:
   - type: pgsql
     name: sociomed-postgres
     region: us-east
-    plan: free   # change to starter when you go live
+    plan: free
