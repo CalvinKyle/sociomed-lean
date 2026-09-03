@@ -1,12 +1,28 @@
-import time
+import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 import redis
-from app.core.config import SESSION_TTL, SESSION_VERSION, WHATSAPP_TOKEN, PHONE_NUMBER_ID, build_redis_url
+from tenacity import retry, stop_after_attempt, wait_exponential
+from twilio.base.exceptions import TwilioRestException
+from twilio.rest import Client
+
+from app.core.config import (
+    PHONE_NUMBER_ID,
+    SESSION_TTL,
+    SESSION_VERSION,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_STATUS_CALLBACK_URL,
+    TWILIO_WHATSAPP_FROM,
+    WHATSAPP_PROVIDER,
+    WHATSAPP_TOKEN,
+    build_redis_url,
+)
 from app.core.states import ConversationState, is_valid_state
 
 logger = logging.getLogger(__name__)
@@ -36,7 +52,7 @@ class WhatsAppSendResult:
         }
 
 
-def _extract_whatsapp_message_id(response_body: str) -> Optional[str]:
+def _extract_meta_whatsapp_message_id(response_body: str) -> Optional[str]:
     try:
         payload = json.loads(response_body)
     except json.JSONDecodeError:
@@ -48,41 +64,122 @@ def _extract_whatsapp_message_id(response_body: str) -> Optional[str]:
     return messages[0].get("id")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
-async def send_whatsapp_message_result(to: str, message: str) -> WhatsAppSendResult:
+def _twilio_whatsapp_address(phone: str) -> str:
+    number = phone.strip()
+    if number.lower().startswith("whatsapp:"):
+        number = number.split(":", 1)[1]
+    if not number.startswith("+"):
+        number = f"+{number}"
+    return f"whatsapp:{number}"
+
+
+async def _send_meta_whatsapp_message(to: str, message: str) -> WhatsAppSendResult:
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(url, headers=headers, json=payload)
-        if res.status_code == 200:
-            provider_message_id = _extract_whatsapp_message_id(res.text)
-            logger.info("whatsapp_message_sent recipient=%s provider_message_id=%s", to, provider_message_id)
-            return WhatsAppSendResult(
-                recipient=to,
-                success=True,
-                status_code=res.status_code,
-                provider_message_id=provider_message_id,
-                response_body=res.text,
-            )
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        provider_message_id = _extract_meta_whatsapp_message_id(response.text)
+        logger.info("whatsapp_message_sent provider=meta recipient=%s provider_message_id=%s", to, provider_message_id)
+        return WhatsAppSendResult(
+            recipient=to,
+            success=True,
+            status_code=response.status_code,
+            provider_message_id=provider_message_id,
+            response_body=response.text,
+        )
 
-        logger.error("whatsapp_message_failed recipient=%s status=%s response=%s", to, res.status_code, res.text[:500])
+    logger.error(
+        "whatsapp_message_failed provider=meta recipient=%s status=%s response=%s",
+        to,
+        response.status_code,
+        response.text[:500],
+    )
+    return WhatsAppSendResult(
+        recipient=to,
+        success=False,
+        status_code=response.status_code,
+        error="whatsapp_api_error",
+        response_body=response.text,
+    )
+
+
+def _create_twilio_whatsapp_message(to: str, message: str):
+    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    payload = {
+        "body": message,
+        "from_": _twilio_whatsapp_address(TWILIO_WHATSAPP_FROM or ""),
+        "to": _twilio_whatsapp_address(to),
+    }
+    if TWILIO_STATUS_CALLBACK_URL:
+        payload["status_callback"] = TWILIO_STATUS_CALLBACK_URL
+    return client.messages.create(**payload)
+
+
+async def _send_twilio_whatsapp_message(to: str, message: str) -> WhatsAppSendResult:
+    try:
+        twilio_message = await asyncio.to_thread(_create_twilio_whatsapp_message, to, message)
+    except TwilioRestException as exc:
+        error_code = str(exc.code) if exc.code is not None else "api_error"
+        logger.error(
+            "whatsapp_message_failed provider=twilio recipient=%s status=%s code=%s error=%s",
+            to,
+            exc.status,
+            exc.code,
+            exc.msg,
+        )
         return WhatsAppSendResult(
             recipient=to,
             success=False,
-            status_code=res.status_code,
-            error="whatsapp_api_error",
-            response_body=res.text,
+            status_code=exc.status,
+            error=f"twilio_{error_code}",
+            response_body=str(exc),
         )
-    except Exception as e:
-        logger.error("whatsapp_message_exception recipient=%s error=%s", to, e)
+
+    provider_message_id = getattr(twilio_message, "sid", None)
+    response_body = json.dumps(
+        {
+            "sid": provider_message_id,
+            "status": getattr(twilio_message, "status", None),
+            "error_code": getattr(twilio_message, "error_code", None),
+        }
+    )
+    logger.info(
+        "whatsapp_message_sent provider=twilio recipient=%s provider_message_id=%s",
+        to,
+        provider_message_id,
+    )
+    return WhatsAppSendResult(
+        recipient=to,
+        success=True,
+        status_code=201,
+        provider_message_id=provider_message_id,
+        response_body=response_body,
+    )
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
+async def send_whatsapp_message_result(to: str, message: str) -> WhatsAppSendResult:
+    try:
+        if WHATSAPP_PROVIDER == "twilio":
+            return await _send_twilio_whatsapp_message(to, message)
+        if WHATSAPP_PROVIDER == "meta":
+            return await _send_meta_whatsapp_message(to, message)
+        return WhatsAppSendResult(
+            recipient=to,
+            success=False,
+            error="unsupported_whatsapp_provider",
+        )
+    except Exception as exc:
+        logger.error("whatsapp_message_exception provider=%s recipient=%s error=%s", WHATSAPP_PROVIDER, to, exc)
         raise
 
 
 async def send_whatsapp_message(to: str, message: str) -> bool:
     result = await send_whatsapp_message_result(to, message)
     return result.success
+
 
 # ── REDIS-BACKED SESSIONS (replaces old in-memory dict) ──
 def save_session(user: str, data: Dict[str, Any]) -> None:
@@ -109,27 +206,33 @@ def get_session(user: str) -> Optional[Dict[str, Any]]:
         return session
     return None
 
+
 def update_session(user: str, key: str, value: Any) -> None:
     session = get_session(user) or {}
     session[key] = value
     save_session(user, session)
     logger.debug(f"Session updated for {user}: {key}={value}")
 
+
 def delete_session(user: str) -> None:
     key = f"session:{user}"
     redis_client.delete(key)
     logger.info(f"Session deleted for {user}")
+
 
 # ── SESSION LOCKS (prevents race conditions on duplicate webhooks) ──
 def acquire_session_lock(user: str, timeout: int = 10) -> bool:
     lock_key = f"session_lock:{user}"
     return bool(redis_client.set(lock_key, "1", ex=timeout, nx=True))
 
+
 def release_session_lock(user: str) -> None:
     redis_client.delete(f"session_lock:{user}")
 
-# ── MESSAGE DEDUPE (Meta redelivers webhook events on timeout/retry) ──
+
+# ── MESSAGE DEDUPE (providers redeliver webhook events on timeout/retry) ──
 WHATSAPP_MESSAGE_DEDUPE_TTL_SECONDS = 60 * 60 * 24
+
 
 def claim_whatsapp_message(message_id: Optional[str]) -> bool:
     """Atomically claim a WhatsApp message id for processing.
@@ -144,6 +247,7 @@ def claim_whatsapp_message(message_id: Optional[str]) -> bool:
     key = f"wamid:{message_id}"
     return bool(redis_client.set(key, "1", nx=True, ex=WHATSAPP_MESSAGE_DEDUPE_TTL_SECONDS))
 
+
 async def notify_vendor(vendor_phone: str, message: str) -> bool:
     if not vendor_phone:
         logger.warning("Vendor phone missing - cannot notify vendor")
@@ -153,16 +257,18 @@ async def notify_vendor(vendor_phone: str, message: str) -> bool:
         logger.error(f"Failed to notify vendor {vendor_phone}")
     return result.success
 
+
 def log_audit_event(user_phone: str, event_type: str, data: Dict[str, Any]) -> None:
-    # (same as before)
     audit_log = {"user_phone": user_phone, "event_type": event_type, "data": data, "timestamp": time.time()}
     logger.info(f"AUDIT: {json.dumps(audit_log)}")
+
 
 def set_state(user: str, state: str):
     """Helper to set the current conversation state (used by the strict state machine)"""
     session = get_session(user) or {}
     session["state"] = state
     save_session(user, session)
+
 
 def get_current_state(user: str) -> str:
     """Helper to get the current conversation state"""
