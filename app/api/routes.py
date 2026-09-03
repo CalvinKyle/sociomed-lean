@@ -2,14 +2,24 @@ import hashlib
 import hmac
 import json
 import os
+from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from twilio.request_validator import RequestValidator
 
 from app.core.auth import require_api_key
-from app.core.config import GOOGLE_CREDS_FILE, GOOGLE_CREDS_JSON, VERIFY_TOKEN, WHATSAPP_APP_SECRET
+from app.core.config import (
+    GOOGLE_CREDS_FILE,
+    GOOGLE_CREDS_JSON,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_STATUS_CALLBACK_URL,
+    TWILIO_WEBHOOK_URL,
+    VERIFY_TOKEN,
+    WHATSAPP_APP_SECRET,
+)
 from app.core.rate_limit import limiter
 from app.core.rfq_status import InvalidRFQStatus
 from app.core.utils import claim_whatsapp_message, log_audit_event, redis_client
@@ -39,9 +49,7 @@ from app.services.procurement import (
 )
 from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
 from app.services.tasks import process_whatsapp_message
-from app.services.whatsapp_service import (
-    extract_message,
-)
+from app.services.whatsapp_service import extract_message, extract_twilio_message
 
 router = APIRouter(prefix="/api")
 
@@ -58,6 +66,29 @@ def _verify_whatsapp_signature(body: bytes, signature: str | None) -> bool:
         digestmod=hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(signature.split("=", 1)[1], expected)
+
+
+def _parse_twilio_form(body: bytes) -> dict[str, str]:
+    return dict(parse_qsl(body.decode("utf-8"), keep_blank_values=True))
+
+
+def _verify_twilio_signature(
+    request: Request,
+    form_data: dict[str, str],
+    signature: str | None,
+    configured_url: str | None,
+) -> bool:
+    if not TWILIO_AUTH_TOKEN or not signature:
+        return False
+    request_url = configured_url or str(request.url)
+    return RequestValidator(TWILIO_AUTH_TOKEN).validate(request_url, form_data, signature)
+
+
+def _empty_twiml_response() -> Response:
+    return Response(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        media_type="application/xml",
+    )
 
 
 @router.get("/health/liveness")
@@ -251,7 +282,7 @@ async def whatsapp_webhook(
             log_audit_event(
                 message.get("from", "unknown"),
                 "webhook_duplicate_message_skipped",
-                {"message_id": message.get("id")},
+                {"message_id": message.get("id"), "provider": "meta"},
             )
             return {"status": "duplicate_ignored"}
 
@@ -261,6 +292,64 @@ async def whatsapp_webhook(
 
     except HTTPException:
         raise
-    except Exception as e:
-        log_audit_event("system", "webhook_error", {"error": str(e)})
+    except Exception as exc:
+        log_audit_event("system", "webhook_error", {"error": str(exc), "provider": "meta"})
         return JSONResponse(status_code=500, content={"status": "error"})
+
+
+@router.post("/webhook/twilio")
+@limiter.limit("60/minute")
+async def twilio_whatsapp_webhook(
+    request: Request,
+    x_twilio_signature: str | None = Header(default=None, alias="X-Twilio-Signature"),
+):
+    try:
+        body_bytes = await request.body()
+        form_data = _parse_twilio_form(body_bytes)
+        if not _verify_twilio_signature(request, form_data, x_twilio_signature, TWILIO_WEBHOOK_URL):
+            raise HTTPException(status_code=403, detail="invalid Twilio webhook signature")
+
+        message = extract_twilio_message(form_data)
+        if not message:
+            return _empty_twiml_response()
+
+        if not claim_whatsapp_message(message.get("id")):
+            log_audit_event(
+                message.get("from", "unknown"),
+                "webhook_duplicate_message_skipped",
+                {"message_id": message.get("id"), "provider": "twilio"},
+            )
+            return _empty_twiml_response()
+
+        process_whatsapp_message.delay(message)
+        return _empty_twiml_response()
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_audit_event("system", "webhook_error", {"error": str(exc), "provider": "twilio"})
+        return JSONResponse(status_code=500, content={"status": "error"})
+
+
+@router.post("/webhook/twilio/status")
+@limiter.limit("120/minute")
+async def twilio_whatsapp_status_callback(
+    request: Request,
+    x_twilio_signature: str | None = Header(default=None, alias="X-Twilio-Signature"),
+):
+    body_bytes = await request.body()
+    form_data = _parse_twilio_form(body_bytes)
+    if not _verify_twilio_signature(request, form_data, x_twilio_signature, TWILIO_STATUS_CALLBACK_URL):
+        raise HTTPException(status_code=403, detail="invalid Twilio status signature")
+
+    log_audit_event(
+        form_data.get("To", "unknown"),
+        "twilio_whatsapp_delivery_status",
+        {
+            "message_sid": form_data.get("MessageSid"),
+            "message_status": form_data.get("MessageStatus"),
+            "error_code": form_data.get("ErrorCode"),
+            "error_message": form_data.get("ErrorMessage"),
+        },
+    )
+    return Response(status_code=204)
