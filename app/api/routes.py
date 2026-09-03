@@ -49,7 +49,8 @@ from app.services.procurement import (
 )
 from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
 from app.services.tasks import process_whatsapp_message
-from app.services.whatsapp_service import extract_message, extract_twilio_message
+from app.services.twilio_adapter import extract_twilio_message
+from app.services.whatsapp_service import extract_message
 
 router = APIRouter(prefix="/api")
 
