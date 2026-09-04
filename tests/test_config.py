@@ -28,6 +28,7 @@ def _reload_config(monkeypatch, **env):
         "REDIS_PORT",
         "REDIS_DB",
         "CACHE_TTL_SECONDS",
+        "SMALL_RFQ_MAX_ITEMS",
         "SESSION_TTL",
         "SESSION_VERSION",
         "DEFAULT_CURRENCY",
@@ -66,6 +67,14 @@ def test_build_redis_url_preserves_credentials_and_switches_databases(monkeypatc
 
     assert config.build_redis_url() == "redis://default:s3cr3t@redis.example.com:6379/0"
     assert config.build_redis_url(db=1) == "redis://default:s3cr3t@redis.example.com:6379/1"
+
+
+def test_intent_flow_runtime_defaults(monkeypatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.SESSION_TTL == 3600
+    assert config.SESSION_VERSION == 2
+    assert config.SMALL_RFQ_MAX_ITEMS == 5
 
 
 def test_async_whatsapp_processing_defaults_to_enabled(monkeypatch):
