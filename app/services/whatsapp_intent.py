@@ -98,6 +98,20 @@ def _resolve_category(text: str, categories: list[str]) -> Optional[str]:
     return None
 
 
+def _product_query(text: str) -> str:
+    cleaned = text
+    for pattern in QUANTITY_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(
+        r"^(?:i\s+(?:need|want|am looking for)|we\s+(?:need|want)|please\s+find|looking for)\s+",
+        "",
+        cleaned,
+        flags=re.I,
+    )
+    cleaned = re.sub(r"\b(?:of|please|available|availability|price|cost)\b", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _looks_multi_item(text: str, products: list[dict], aliases: list[dict], data: Optional[dict]) -> bool:
     fragments = [part.strip() for part in MULTI_ITEM_SEPARATOR.split(text) if part.strip()]
     if len(fragments) < 2:
@@ -135,8 +149,12 @@ def classify_entry_intent(
     if _looks_multi_item(normalized, products, aliases, data):
         return IntentResult(BuyerIntent.MULTI_ITEM, normalized)
 
+    category = _resolve_category(normalized, categories)
+    if category:
+        return IntentResult(BuyerIntent.CATEGORY, normalized, category=category)
+
     quantity, uom = extract_quantity(normalized)
-    matches = find_products(normalized, products, aliases, limit=5, data=data)
+    matches = find_products(_product_query(normalized), products, aliases, limit=5, data=data)
     if matches:
         intent = BuyerIntent.PRODUCT_WITH_QUANTITY if quantity else BuyerIntent.PRODUCT
         return IntentResult(
@@ -147,10 +165,6 @@ def classify_entry_intent(
             product=matches[0] if len(matches) == 1 else None,
             matches=tuple(matches),
         )
-
-    category = _resolve_category(normalized, categories)
-    if category:
-        return IntentResult(BuyerIntent.CATEGORY, normalized, category=category)
 
     if GREETING_PATTERN.match(normalized):
         return IntentResult(BuyerIntent.GREETING, normalized)
