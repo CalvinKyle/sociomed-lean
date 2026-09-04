@@ -2,10 +2,11 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from app.core.config import SMALL_RFQ_MAX_ITEMS
 from app.services.search import find_products, get_results
 
 
-BULK_MATCH_THRESHOLD = 3
+BULK_MATCH_THRESHOLD = SMALL_RFQ_MAX_ITEMS
 MAX_PRODUCT_NAME_LENGTH = 160
 ITEM_QUANTITY_PATTERN = re.compile(r"^(.*?)\s*[xX]\s*(\d+)$")
 
