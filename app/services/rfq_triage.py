@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
 
 from app.core.config import SMALL_RFQ_MAX_ITEMS
 from app.services.search import find_products, get_results
@@ -112,8 +112,26 @@ def _bulk_notes(items: list[str], original_text: str) -> str:
     return f"Bulk RFQ items: {numbered_items}. Original request: {original_text.strip()}"
 
 
-def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
+def parse_direct_rfq_message(
+    text: str,
+    buyer_profile: Optional[Mapping[str, str]] = None,
+) -> Optional[DirectRFQPayload]:
     parts = _split_pipe_message(text)
+    if len(parts) == 2 and buyer_profile:
+        item_text, quantity_text = parts
+        try:
+            quantity = int(quantity_text)
+        except ValueError:
+            return None
+        return DirectRFQPayload(
+            buyer_name=buyer_profile.get("contact_name", ""),
+            product_name=_trim_product_name(item_text),
+            quantity=quantity,
+            organization=buyer_profile.get("organization", ""),
+            delivery_location=buyer_profile.get("delivery_location", ""),
+            source="whatsapp_returning_buyer_rfq",
+            notes="Buyer confirmed reuse of saved procurement profile",
+        )
     if len(parts) >= 5:
         buyer_name, item_text, quantity_text, facility, location = parts[:5]
         try:
