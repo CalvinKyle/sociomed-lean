@@ -126,6 +126,9 @@ def test_returning_sender_with_expired_session_restarts_from_current_intent(monk
     monkeypatch.setattr(whatsapp_service, "has_seen_before", lambda _user: True)
     monkeypatch.setattr(whatsapp_service, "save_session", lambda user, data: saved_sessions.update({user: data}))
     monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(whatsapp_service, "get_cached_data", lambda: {"products": [], "aliases": []})
+    monkeypatch.setattr(whatsapp_service, "get_categories", lambda: [])
+    monkeypatch.setattr(whatsapp_service, "_load_buyer_profile", lambda _sender: None)
 
     asyncio.run(
         whatsapp_service.handle_incoming_message(
