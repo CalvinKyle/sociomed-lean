@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.services import whatsapp_processing
+from app.services import tasks, whatsapp_processing
 
 
 def test_process_whatsapp_message_now_reuses_handler_and_releases_lock(monkeypatch):
@@ -48,3 +48,17 @@ def test_process_whatsapp_message_now_rejects_concurrent_sender(monkeypatch):
 
     with pytest.raises(whatsapp_processing.WhatsAppMessageProcessingBusy):
         asyncio.run(whatsapp_processing.process_whatsapp_message_now(message))
+
+
+def test_celery_task_reuses_shared_processor(monkeypatch):
+    processed = []
+    message = {"id": "SM123", "from": "+256700111111"}
+
+    async def fake_process_now(payload):
+        processed.append(payload)
+
+    monkeypatch.setattr(tasks, "process_whatsapp_message_now", fake_process_now)
+
+    tasks.process_whatsapp_message.run(message)
+
+    assert processed == [message]
