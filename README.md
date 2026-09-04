@@ -55,6 +55,7 @@ Open [http://localhost:8000/docs](http://localhost:8000/docs) to test the procur
 Twilio beta guide: [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md)
 Production environment reference: [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md)
 Data blueprint reference: [docs/DATA_BLUEPRINT.md](docs/DATA_BLUEPRINT.md)
+Intent-first WhatsApp flow: [docs/WHATSAPP_INTENT_FLOW.md](docs/WHATSAPP_INTENT_FLOW.md)
 
 ## Environment Sections
 
@@ -71,7 +72,7 @@ These are the concrete setup sections you need to address next:
 5. Google Sheets sync
    Use `GOOGLE_CREDS_FILE=.secrets/google-service-account.json` locally or `GOOGLE_CREDS_JSON` in production, plus `SHEET_NAME=sociomed_db`.
 6. Database and Redis
-   Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=1800`, and `CACHE_TTL_SECONDS=300`.
+   Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=3600`, `SESSION_VERSION=2`, `SMALL_RFQ_MAX_ITEMS=5`, and `CACHE_TTL_SECONDS=300`.
 7. Render deployment
    Sandbox mode needs the web service, Redis, and Postgres. Production async mode also needs a Celery worker sharing the same provider credentials and Redis instance.
 
@@ -123,7 +124,9 @@ Primary catalog tables:
 Commercial pipeline tables:
 
 - `buyer_leads`
+- `buyer_profiles`
 - `rfq_requests`
+- `rfq_line_items`
 
 ## Launch Checklist
 
