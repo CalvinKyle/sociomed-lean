@@ -11,6 +11,12 @@ APP_ENV = os.getenv("APP_ENV", "development").lower()
 # WhatsApp provider
 SUPPORTED_WHATSAPP_PROVIDERS = {"meta", "twilio"}
 WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "meta").lower()
+ASYNC_WHATSAPP_PROCESSING = os.getenv("ASYNC_WHATSAPP_PROCESSING", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # Meta WhatsApp Cloud API
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
