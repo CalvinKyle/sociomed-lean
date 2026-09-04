@@ -35,6 +35,7 @@ from app.services.rfq_triage import (
     parse_direct_rfq_message,
 )
 from app.services.search import find_products, get_results
+from app.services.whatsapp_intent import BuyerIntent, classify_entry_intent
 from app.core.cache import get_cached_data
 
 logger = logging.getLogger(__name__)
@@ -101,14 +102,12 @@ def _unsupported_message_reply(message: Dict) -> str:
 def _main_menu() -> str:
     return (
         "Welcome to SocioMed.\n\n"
-        "We help procurement teams source medical supplies faster through WhatsApp.\n\n"
-        "Reply with a number:\n"
-        "1. Search for a product\n"
-        "2. View featured offers\n"
+        "What medical supply do you need today? You can type a product immediately.\n\n"
+        "1. Search products\n"
+        "2. Browse categories\n"
         "3. Request a quotation\n"
         "4. Talk to sales\n"
-        "5. Help\n"
-        "6. Browse by category"
+        "0. Main menu"
     )
 
 
@@ -398,35 +397,35 @@ async def handle_incoming_message(message: Dict):
         _transition_session(sender, current_state, ConversationState.MENU)
         return
 
-    if not session or current_state == ConversationState.IDLE.value:
-        if not session and has_seen_before(sender):
-            await send_whatsapp_message(
-                sender,
-                "Your previous session timed out, so nothing you started was saved — "
-                "here's the main menu again.\n\n" + _main_menu(),
-            )
-        else:
-            await send_whatsapp_message(sender, _main_menu())
-        _transition_session(sender, current_state, ConversationState.MENU)
-        return
+    if not session or current_state in {ConversationState.IDLE.value, ConversationState.MENU.value}:
+        data = get_cached_data()
+        entry_intent = classify_entry_intent(
+            text,
+            data.get("products", []),
+            data.get("aliases", []),
+            get_categories(),
+            data=data,
+        )
 
-    if current_state == ConversationState.MENU.value:
-        if text_clean == "1":
+        if entry_intent.intent == BuyerIntent.RESTRICTED_MEDICINE:
             await send_whatsapp_message(
                 sender,
-                "Please type the product you want to source, for example surgical gloves, IV set, or oxygen mask.",
+                "SocioMed handles medical supplies and equipment, not medicines. "
+                "Type the supply item you need, or reply SALES for help.",
             )
-            _transition_session(sender, current_state, ConversationState.SEARCHING)
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
-        if text_clean == "2":
-            await send_whatsapp_message(sender, _featured_offers_message(currency))
-            _transition_session(sender, current_state, ConversationState.SEARCHING)
+
+        if entry_intent.intent == BuyerIntent.GREETING or (
+            entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "menu"
+        ):
+            await send_whatsapp_message(sender, _main_menu())
+            _transition_session(sender, current_state, ConversationState.MENU)
             return
-        if text_clean == "3":
-            await send_whatsapp_message(sender, _direct_rfq_prompt())
-            _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
-            return
-        if text_clean == "4":
+
+        if entry_intent.intent == BuyerIntent.SALES or (
+            entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "sales"
+        ):
             await send_whatsapp_message(
                 sender,
                 "Reply with: name | organization | what you need.\n"
@@ -434,18 +433,36 @@ async def handle_incoming_message(message: Dict):
             )
             _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
             return
-        if text_clean == "5":
-            await send_whatsapp_message(sender, _help_message())
-            _transition_session(sender, current_state, ConversationState.MENU)
-            return
-        if text_clean == "6":
-            categories = get_categories()
-            record_funnel_event(
-                "browse_categories",
-                source="whatsapp",
-                actor_id=sender,
-                data={"category_count": len(categories)},
+
+        if entry_intent.intent in {BuyerIntent.FORMAL_PURCHASE, BuyerIntent.MULTI_ITEM} or (
+            entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "quote"
+        ):
+            await send_whatsapp_message(sender, _direct_rfq_prompt())
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.DIRECT_RFQ,
+                formal_purchase=True,
             )
+            return
+
+        if entry_intent.intent == BuyerIntent.CATEGORY:
+            category_products = get_products_by_category(entry_intent.category)
+            await send_whatsapp_message(
+                sender,
+                _category_products_message(entry_intent.category, category_products),
+            )
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.CATEGORY_SELECTED,
+                category_name=entry_intent.category,
+                category_products=category_products[:12],
+            )
+            return
+
+        if entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "categories":
+            categories = get_categories()
             await send_whatsapp_message(sender, _browse_categories_message(categories))
             _transition_session(
                 sender,
@@ -455,8 +472,25 @@ async def handle_incoming_message(message: Dict):
             )
             return
 
-        await send_whatsapp_message(sender, "Please reply with a number from 1 to 6.")
-        return
+        if entry_intent.intent in {BuyerIntent.PRODUCT, BuyerIntent.PRODUCT_WITH_QUANTITY}:
+            current_state = ConversationState.SEARCHING.value
+            session = {
+                "state": current_state,
+                "pending_quantity": entry_intent.quantity,
+                "pending_uom": entry_intent.uom,
+            }
+        elif entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "search":
+            await send_whatsapp_message(sender, "What medical supply are you looking for?")
+            _transition_session(sender, current_state, ConversationState.SEARCHING)
+            return
+        else:
+            await send_whatsapp_message(
+                sender,
+                "Type a medical supply, QUOTE for a formal request, CATEGORIES to browse, "
+                "or SALES for help. Reply MENU to see all options.",
+            )
+            _transition_session(sender, current_state, ConversationState.MENU)
+            return
 
     if current_state == ConversationState.SEARCHING.value:
         if is_bulk_request(text):
