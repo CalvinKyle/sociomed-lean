@@ -62,8 +62,8 @@ These are the concrete setup sections you need to address next:
 
 1. Shared identity and routing
    Set `APP_ENV`, `PUBLIC_BASE_URL`, `SUPPORT_EMAIL`, `SALES_AGENT_PHONE`, `DEFAULT_CURRENCY`, `ENABLE_OPEN_DOCS`, `API_KEY`, and `LOG_LEVEL`.
-2. WhatsApp provider
-   Set `WHATSAPP_PROVIDER=twilio` for beta testing or `WHATSAPP_PROVIDER=meta` for the existing Meta Cloud API path.
+2. WhatsApp provider and processing
+   Set `WHATSAPP_PROVIDER=twilio` and `ASYNC_WHATSAPP_PROCESSING=false` for worker-free Sandbox testing. Set the processing flag to `true` only when a Celery worker is deployed.
 3. Twilio WhatsApp
    Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `TWILIO_WEBHOOK_URL`, and optionally `TWILIO_STATUS_CALLBACK_URL`.
 4. Meta WhatsApp Cloud API
@@ -73,7 +73,7 @@ These are the concrete setup sections you need to address next:
 6. Database and Redis
    Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=1800`, and `CACHE_TTL_SECONDS=300`.
 7. Render deployment
-   The web service and Celery workers must share the same selected WhatsApp provider, credentials, Postgres, Redis, and sales-routing variables.
+   Sandbox mode needs the web service, Redis, and Postgres. Production async mode also needs a Celery worker sharing the same provider credentials and Redis instance.
 
 Use [.env.example](.env.example) for local machines and [.env.production.example](.env.production.example) for production values. The examples contain placeholders only; real credentials belong in `.env.local` or the Render Environment page.
 
@@ -82,8 +82,9 @@ Use [.env.example](.env.example) for local machines and [.env.production.example
 ```text
 Twilio / Meta WhatsApp ──▶ FastAPI (routes) ──▶ services ──▶ data_access ──▶ PostgreSQL
                                   │                                   ▲
+                                  ├── synchronous Sandbox             │
                                   ▼                                   │
-                              Celery (async)                     Redis (cache)
+                         Celery (optional async)                 Redis (state)
                                   │
                           Google Sheets ──▶ sync_sheets_to_db.py ──▶ PostgreSQL
 ```
@@ -131,17 +132,32 @@ Before outreach, make sure these are done:
 1. Load a high-confidence catalog into Sheets, then run `python3 sync_sheets_to_db.py`.
 2. Set `SALES_AGENT_PHONE` so every buyer request gets routed to a human.
 3. Deploy the API and verify authenticated `/api/health`, `/docs`, public `/api/catalog/featured`, and public `/api/catalog/search?q=gloves`.
-4. For Twilio beta, follow [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md), join each tester to the Sandbox, and point the Sandbox webhook to `/api/webhook/twilio`.
+4. For Twilio beta, set `ASYNC_WHATSAPP_PROCESSING=false`, follow [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md), join each tester to the Sandbox, and point the Sandbox webhook to `/api/webhook/twilio`.
 5. For Meta, connect the webhook to `/api/webhook` and confirm verification succeeds with `hub.verify_token`.
 6. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at authenticated `/api/leads` and `/api/rfqs`.
 7. Use procurement-language messaging in outreach: faster supplier comparison, RFQ turnaround, stock visibility, and WhatsApp-native ordering.
 
-## Async Processing
+## WhatsApp Processing Modes
 
-Webhook messages are offloaded to Celery for responsiveness.
+For low-volume Twilio Sandbox testing:
 
-- Run locally: `celery -A app.core.celery_app worker --loglevel=info`
-- Monitor with Flower if needed
+```text
+ASYNC_WHATSAPP_PROCESSING=false
+```
+
+The web service runs the existing WhatsApp handler directly. Redis still provides sessions, caching, duplicate protection, and sender locks. A Celery worker is not required.
+
+For production asynchronous processing:
+
+```text
+ASYNC_WHATSAPP_PROCESSING=true
+```
+
+Deploy a Celery worker connected to the same Redis instance:
+
+```bash
+celery -A app.core.celery_app worker --loglevel=info
+```
 
 ## Testing
 
