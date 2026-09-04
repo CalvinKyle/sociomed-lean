@@ -1,11 +1,15 @@
-from app.core.celery_app import celery_app
+import asyncio
+import logging
+
 from celery import Task
 
+from app.core.celery_app import celery_app
+from app.core.utils import log_audit_event, send_whatsapp_message
 from app.services.rfq_digest import send_daily_rfq_digest as deliver_daily_rfq_digest
-from app.services.whatsapp_service import handle_incoming_message
-from app.core.utils import acquire_session_lock, log_audit_event, release_session_lock, send_whatsapp_message
-import logging
-import asyncio
+from app.services.whatsapp_processing import (
+    WhatsAppMessageProcessingBusy,
+    process_whatsapp_message_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,28 +42,25 @@ class WhatsAppMessageTask(Task):
     bind=True,
     max_retries=3,
     default_retry_delay=5,
-    acks_late=True,      # Only ack after task completes — prevents lost messages on crash
+    acks_late=True,
     base=WhatsAppMessageTask,
 )
 def process_whatsapp_message(self, message: dict):
     sender = message.get("from", "unknown")
-    
-    if not acquire_session_lock(sender):
-        logger.info(f"Session lock held for {sender} — retrying in 2s")
-        raise self.retry(countdown=2)
-    
+
     try:
-        asyncio.run(handle_incoming_message(message))
+        asyncio.run(process_whatsapp_message_now(message))
+    except WhatsAppMessageProcessingBusy:
+        logger.info("Session lock held for %s — retrying in 2s", sender)
+        raise self.retry(countdown=2)
     except Exception as exc:
-        logger.error(f"Task failed for {sender}: {exc}")
+        logger.error("Task failed for %s: %s", sender, exc)
         log_audit_event(
             sender,
             "whatsapp_task_attempt_failed",
             {"task_id": self.request.id, "attempt": self.request.retries + 1, "error": str(exc)},
         )
         raise self.retry(exc=exc)
-    finally:
-        release_session_lock(sender)
 
 
 @celery_app.task(name="send_daily_rfq_digest")
