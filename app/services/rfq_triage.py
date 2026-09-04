@@ -189,6 +189,9 @@ def format_ambiguous_match_message(matches: list[Dict]) -> str:
             "Reply RFQ if this is a bulk request, or AGENT for a sourcing handoff."
         )
     else:
-        next_step = "Reply with the product number you want to price first, or Reply RFQ for a manual quotation."
+        next_step = (
+            "Reply with the product number you want to price first, "
+            "Reply RFQ for a manual quotation, or AGENT for sales."
+        )
 
     return f"I found multiple possible matches:\n{product_list}\n\n{next_step}"
