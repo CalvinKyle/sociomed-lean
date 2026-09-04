@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, JSON, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import DB_MAX_OVERFLOW, DB_POOL_RECYCLE_SECONDS, DB_POOL_SIZE, DATABASE_URL
@@ -30,6 +30,8 @@ class Product(Base):
     category = Column(String)
     clinical_speciality = Column(String)
     related_ids = Column(Text)
+    product_family_id = Column(String)
+    equipment_review_required = Column(Boolean, default=False, nullable=False)
 
 class Vendor(Base):
     __tablename__ = "vendors"
@@ -59,6 +61,7 @@ class Pricing(Base):
     min_qty = Column(Integer, nullable=False)
     max_qty = Column(Integer)
     unit_price = Column(Integer, nullable=False)
+    price_valid_until = Column(Date)
 
 class Alias(Base):
     __tablename__ = "aliases"
@@ -82,6 +85,19 @@ class BuyerLead(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class BuyerProfile(Base):
+    __tablename__ = "buyer_profiles"
+
+    phone = Column(String, primary_key=True)
+    contact_name = Column(String, nullable=False)
+    organization = Column(String, nullable=False)
+    role = Column(String)
+    country = Column(String)
+    delivery_location = Column(String)
+    preferred_currency = Column(String, default="UGX", nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class RFQRequest(Base):
     __tablename__ = "rfq_requests"
 
@@ -100,6 +116,13 @@ class RFQRequest(Base):
     currency = Column(String, default="UGX", nullable=False)
     source = Column(String, default="api", nullable=False)
     status = Column(String, default="new", nullable=False)
+    procurement_stage = Column(String, default="formal_purchase", nullable=False)
+    formal_quote = Column(Boolean, default=True, nullable=False)
+    required_by = Column(String)
+    payment_preference = Column(String)
+    destination_country = Column(String)
+    equipment_review_required = Column(Boolean, default=False, nullable=False)
+    manual_review_reason = Column(String)
     order_value = Column(Integer, nullable=True)
     pfi_reference = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
