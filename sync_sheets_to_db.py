@@ -14,6 +14,7 @@ import sys
 import subprocess
 import logging
 import argparse
+from datetime import date, datetime
 
 sys.path.insert(0, ".")
 
@@ -47,6 +48,16 @@ def _coerce_float(value, default=None):
     if isinstance(value, (int, float)):
         return float(value)
     return float(str(value).replace(",", "").strip())
+
+
+def _coerce_date(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value).strip())
 
 
 def _coerce_bool(value, default=False):
@@ -171,8 +182,14 @@ def sync_sheets_to_db(dry_run: bool = False):
                 "category": "category",
                 "clinical_speciality": "clinical_speciality",
                 "related_ids": "related_ids",
+                "product_family_id": "product_family_id",
             },
         )
+        for row in data["products"]:
+            product_id = str(row.get("product_id", "")).strip()
+            raw_review = row.get("equipment_review_required")
+            if product_id and raw_review not in (None, ""):
+                db.get(Product, product_id).equipment_review_required = _coerce_bool(raw_review)
         logger.info("Products: %d inserted, %d updated", ins, upd)
 
         # ── vendors ──
@@ -210,6 +227,7 @@ def sync_sheets_to_db(dry_run: bool = False):
             obj.min_qty = _coerce_int(row.get("min_qty", 0))
             obj.max_qty = _coerce_int(row.get("max_qty")) if row.get("max_qty") else None
             obj.unit_price = _coerce_int(row.get("unit_price", 0))
+            obj.price_valid_until = _coerce_date(row.get("price_valid_until"))
         logger.info("Pricing: upserted %d rows", len(data["pricing"]))
 
         # ── aliases: delete-and-replace is safe because aliases have no FK dependants ──
