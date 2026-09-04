@@ -65,7 +65,11 @@ services:
       - key: CACHE_TTL_SECONDS
         value: "300"
       - key: SESSION_TTL
-        value: "1800"
+        value: "3600"
+      - key: SESSION_VERSION
+        value: "2"
+      - key: SMALL_RFQ_MAX_ITEMS
+        value: "5"
       - key: DEFAULT_CURRENCY
         value: UGX
 
