@@ -22,15 +22,18 @@ Set these in every environment:
 | `API_KEY` | `sociomed-local-api-key` | Strong random secret | Required for protected API and health endpoints. |
 | `LOG_LEVEL` | `INFO` | `INFO` | Raise to `DEBUG` only while troubleshooting. |
 
-## 2. Select the WhatsApp Provider
+## 2. Select the WhatsApp Provider and Processing Mode
 
-Set one value:
+| Variable | Sandbox value | Production value | Purpose |
+| --- | --- | --- | --- |
+| `WHATSAPP_PROVIDER` | `twilio` | `twilio` or `meta` | Selects the inbound and outbound provider. |
+| `ASYNC_WHATSAPP_PROCESSING` | `false` | `true` when a Celery worker is deployed | Controls whether the Twilio webhook processes immediately or queues to Celery. |
 
-| Variable | Value |
-| --- | --- |
-| `WHATSAPP_PROVIDER` | `twilio` for the Twilio Sandbox beta or `meta` for Meta Cloud API |
+With `ASYNC_WHATSAPP_PROCESSING=false`, the Twilio webhook awaits the existing WhatsApp handler in the Render web service and returns TwiML after processing. This is the recommended low-volume Sandbox configuration and does not require a paid Celery worker.
 
-Production validation only requires credentials for the selected provider. The web service and every Celery process that sends WhatsApp messages must use the same provider.
+With `ASYNC_WHATSAPP_PROCESSING=true`, the webhook queues the same handler through Celery. Enable this only when the web service and Celery worker share the same Redis instance.
+
+Redis is required in both modes for sessions, caching, duplicate-message protection, and per-sender locks.
 
 ## 3. Twilio WhatsApp Beta
 
@@ -103,19 +106,27 @@ Exchange rates can be overridden without a deploy:
 
 ## 7. Render Services
 
-The blueprint defines these services:
+For a Twilio Sandbox beta, only these services are required:
 
 1. `sociomed-lean` web API
-2. `sociomed-lean-celery-worker` message worker
-3. `sociomed-lean-celery-beat` scheduled jobs
-4. `sociomed-lean-flower` optional monitoring dashboard
+2. `sociomed-redis`
+3. `sociomed-postgres`
+
+Set `ASYNC_WHATSAPP_PROCESSING=false` on the web service. The Celery worker, Celery beat, and Flower services can remain suspended or undeployed during Sandbox testing.
+
+For later asynchronous production processing, the blueprint still defines:
+
+1. `sociomed-lean-celery-worker`
+2. `sociomed-lean-celery-beat`
+3. `sociomed-lean-flower`
 
 Important production rules:
 
-- The web service and Celery worker must share Twilio or Meta credentials, Postgres, Redis, and sales-routing values.
+- Deploy the Celery worker before changing `ASYNC_WHATSAPP_PROCESSING` to `true`.
+- The web service and Celery worker must share WhatsApp credentials, Postgres, Redis, and sales-routing values.
 - The Celery beat service also needs outbound provider credentials if scheduled WhatsApp digests are enabled.
-- `render.yaml` uses `sync: false` for secrets, so add the real values in the Render Environment page.
-- `autoDeploy` is disabled for the web service; deploy the updated service manually after changing code or environment variables.
+- `render.yaml` uses `sync: false` for secrets, so add real values in the Render Environment page.
+- `autoDeploy` is disabled for the web service; deploy manually after changing code or environment variables.
 
 ## 8. Cross-Device Workflow
 
@@ -128,27 +139,30 @@ Use this pattern so your laptop, VS Code, Codex, and Render stay in sync without
 5. Never commit `.env.local`, `.secrets/`, credential JSON, Auth Tokens, or API keys.
 6. Rotate any credential immediately if it is exposed in git, logs, screenshots, or chat.
 
-## 9. Fastest Twilio Beta Sequence
+## 9. Fastest Worker-Free Twilio Beta Sequence
 
-1. Merge or deploy the Twilio integration branch.
-2. Add the real Twilio values to Render for the web service and Celery worker.
-3. Deploy the web service and worker.
-4. Run `alembic upgrade head`.
-5. Load the catalog with `python3 sync_sheets_to_db.py`.
-6. Join each tester to the Twilio WhatsApp Sandbox.
-7. Point the Twilio Sandbox `When a message comes in` URL to `/api/webhook/twilio` using `POST`.
-8. Verify `/api/health/liveness` and send `hello` from a joined WhatsApp tester.
-9. Complete a product search and test RFQ to confirm the full flow.
+1. Deploy the Twilio integration branch to the existing Render web service.
+2. Set `WHATSAPP_PROVIDER=twilio` and `ASYNC_WHATSAPP_PROCESSING=false`.
+3. Add the real Twilio values to the Render web service.
+4. Keep Redis and Postgres connected; suspend the Celery worker.
+5. Run `alembic upgrade head`.
+6. Load the catalog with `python3 sync_sheets_to_db.py`.
+7. Join each tester to the Twilio WhatsApp Sandbox.
+8. Point the Twilio Sandbox `When a message comes in` URL to `/api/webhook/twilio` using `POST`.
+9. Verify `/api/health/liveness` and send `hello` from a joined WhatsApp tester.
+10. Complete a product search and test RFQ to confirm the full flow.
 
 ## 10. Local Machine Bootstrap
 
 1. Copy [.env.example](../.env.example) to `.env.local`.
-2. Add real local Twilio values only to `.env.local`.
-3. Create `.secrets/google-service-account.json`.
-4. Start local Postgres and Redis.
-5. Run `pip install -r requirements.txt`.
-6. Run `alembic upgrade head`.
-7. Run `python3 sync_sheets_to_db.py`.
-8. Start the API with `uvicorn app.main:app --reload`.
-9. Start the worker with `celery -A app.core.celery_app worker --loglevel=info`.
-10. For local Twilio testing, expose port 8000 with ngrok and use the exact HTTPS URL in `.env.local` and Twilio Sandbox settings.
+2. Set `ASYNC_WHATSAPP_PROCESSING=false`.
+3. Add real local Twilio values only to `.env.local`.
+4. Create `.secrets/google-service-account.json`.
+5. Start local Postgres and Redis.
+6. Run `pip install -r requirements.txt`.
+7. Run `alembic upgrade head`.
+8. Run `python3 sync_sheets_to_db.py`.
+9. Start the API with `uvicorn app.main:app --reload`.
+10. Expose port 8000 with ngrok and use the exact HTTPS URL in `.env.local` and Twilio Sandbox settings.
+
+A local Celery worker is not required while `ASYNC_WHATSAPP_PROCESSING=false`.
