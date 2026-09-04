@@ -49,7 +49,7 @@ These power `/api/webhook/twilio`, outbound WhatsApp messages, request validatio
 
 The webhook URL configured in Twilio and `TWILIO_WEBHOOK_URL` must match exactly because Twilio signs the complete URL and all form parameters.
 
-Follow [TWILIO_BETA.md](TWILIO_BETA.md) for the Console, Sandbox, Render, deployment, and smoke-test sequence.
+Follow [TWILIO_BETA.md](TWILIO_BETA.md) for the Console, Sandbox, Render, deployment, and smoke-test sequence. The deterministic routing and privacy contract is documented in [WHATSAPP_INTENT_FLOW.md](WHATSAPP_INTENT_FLOW.md).
 
 ## 4. Meta WhatsApp Cloud API
 
