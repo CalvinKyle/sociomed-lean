@@ -76,10 +76,10 @@ def test_handle_incoming_message_processes_text_payloads(monkeypatch):
             {
                 "from": "256700111111",
                 "type": "text",
-                "text": {"body": "5"},
+                "text": {"body": "hello"},
             }
         )
     )
 
-    assert replies == [("256700111111", whatsapp_service._help_message())]
+    assert replies == [("256700111111", whatsapp_service._main_menu())]
     assert saved_sessions == [("256700111111", {"state": "MENU"})]
