@@ -149,6 +149,9 @@ def classify_entry_intent(
     if _looks_multi_item(normalized, products, aliases, data):
         return IntentResult(BuyerIntent.MULTI_ITEM, normalized)
 
+    if GREETING_PATTERN.match(normalized):
+        return IntentResult(BuyerIntent.GREETING, normalized)
+
     category = _resolve_category(normalized, categories)
     if category:
         return IntentResult(BuyerIntent.CATEGORY, normalized, category=category)
@@ -165,9 +168,6 @@ def classify_entry_intent(
             product=matches[0] if len(matches) == 1 else None,
             matches=tuple(matches),
         )
-
-    if GREETING_PATTERN.match(normalized):
-        return IntentResult(BuyerIntent.GREETING, normalized)
 
     if state_expects_response:
         return IntentResult(BuyerIntent.STATE_RESPONSE, normalized)
