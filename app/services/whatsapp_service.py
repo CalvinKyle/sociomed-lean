@@ -397,6 +397,33 @@ async def handle_incoming_message(message: Dict):
         _transition_session(sender, current_state, ConversationState.MENU)
         return
 
+    if text_clean in {"search", "categories", "quote", "sales"} and current_state not in {
+        ConversationState.IDLE.value,
+        ConversationState.MENU.value,
+    }:
+        if text_clean == "search":
+            await send_whatsapp_message(sender, "What medical supply are you looking for?")
+            _transition_session(sender, current_state, ConversationState.SEARCHING)
+        elif text_clean == "categories":
+            categories = get_categories()
+            await send_whatsapp_message(sender, _browse_categories_message(categories))
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.BROWSING_CATEGORIES,
+                categories=categories,
+            )
+        elif text_clean == "quote":
+            await send_whatsapp_message(sender, _direct_rfq_prompt())
+            _transition_session(sender, current_state, ConversationState.DIRECT_RFQ, formal_purchase=True)
+        else:
+            await send_whatsapp_message(
+                sender,
+                "Reply with: name | organization | what you need. We will connect you with sales.",
+            )
+            _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
+        return
+
     if not session or current_state in {ConversationState.IDLE.value, ConversationState.MENU.value}:
         data = get_cached_data()
         entry_intent = classify_entry_intent(
@@ -552,7 +579,9 @@ async def handle_incoming_message(message: Dict):
             )
             await send_whatsapp_message(
                 sender,
-                "I could not find that exact product. Try another search term, or reply 3 from the main menu to request a quotation.",
+                "I could not find that exact product.\n\n"
+                "Reply SEARCH to try another term, QUOTE and SocioMed can source it, "
+                "or SALES for help.",
             )
             _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
@@ -578,6 +607,9 @@ async def handle_incoming_message(message: Dict):
             return
 
         reply, option_map = format_results(product["name"], results, currency=currency)
+        pending_quantity = session.get("pending_quantity")
+        if pending_quantity:
+            reply = f"Requested quantity: {pending_quantity} {session.get('pending_uom') or 'units'}.\n\n{reply}"
         reply, related_products = _append_related_products(reply, product, currency)
         _transition_session(
             sender,
@@ -795,11 +827,11 @@ async def handle_incoming_message(message: Dict):
             )
             await send_whatsapp_message(
                 sender,
-                f"You selected {selected['brand']} from {selected.get('vendor_name', 'Supplier')}.\n"
+                f"You selected the {selected['brand']} option.\n"
                 f"{sku_line}"
                 f"UoM: {selected.get('uom', 'unit')}\n"
                 f"Minimum order: {selected.get('min_qty', 1)} {selected.get('uom', 'unit')}\n"
-                f"Stock: {selected.get('stock_qty', 0)} {selected.get('uom', 'unit')}\n\n"
+                "Availability and delivery timing will be confirmed in the quotation.\n\n"
                 f"How many {selected.get('uom', 'unit')} do you need?",
             )
             return
