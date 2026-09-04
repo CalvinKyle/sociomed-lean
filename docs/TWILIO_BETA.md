@@ -14,7 +14,7 @@ For low-volume Sandbox testing, set `ASYNC_WHATSAPP_PROCESSING=false`. The Rende
 - `POST /api/webhook/twilio/status` records Twilio delivery status callbacks in the audit log.
 - Incoming Twilio payloads are translated into the existing SocioMed conversation flow, so catalog, RFQ, supplier notification, and sales handoff behavior stays unchanged.
 
-Both modes use the same message-processing service and Redis session lock. If inline processing fails, the message's duplicate-protection claim is released and the webhook returns an error so Twilio can retry.
+Both modes use the same message-processing service and Redis session lock. See [WHATSAPP_INTENT_FLOW.md](WHATSAPP_INTENT_FLOW.md) for the buyer-routing and privacy contract. If inline processing fails, the message's duplicate-protection claim is released and the webhook returns an error so Twilio can retry.
 
 ## 1. Get the Twilio Values
 
@@ -47,6 +47,9 @@ Set:
 ```text
 WHATSAPP_PROVIDER=twilio
 ASYNC_WHATSAPP_PROCESSING=false
+SESSION_TTL=3600
+SESSION_VERSION=2
+SMALL_RFQ_MAX_ITEMS=5
 TWILIO_ACCOUNT_SID=AC...
 TWILIO_AUTH_TOKEN=your-real-primary-auth-token
 TWILIO_WHATSAPP_FROM=whatsapp:+YOUR_TWILIO_SANDBOX_NUMBER
@@ -89,10 +92,11 @@ From a phone that joined the Sandbox:
 
 1. Send `hello` to the Twilio Sandbox WhatsApp number.
 2. Confirm the SocioMed main menu arrives.
-3. Reply `1`, search for a product, and confirm results arrive.
-4. Reply `3` and submit a sample RFQ.
-5. Confirm the RFQ is saved and the supplier or sales notification is attempted.
-6. Check Render logs for `twilio_whatsapp_delivery_status` audit events.
+3. Send `10 boxes of surgical gloves` and confirm search starts without a menu detour.
+4. Send `CATEGORIES` and confirm the live taxonomy appears.
+5. Reply `QUOTE` and submit a sample RFQ.
+6. Confirm the RFQ and buyer profile are saved and the sales notification is attempted.
+7. Check Render logs for `twilio_whatsapp_delivery_status` audit events.
 
 Twilio/WhatsApp free-form replies are intended for the active customer-service conversation window. For proactive messages outside that window, configure approved WhatsApp Content Templates before production use.
 
