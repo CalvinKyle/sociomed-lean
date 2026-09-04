@@ -248,6 +248,11 @@ def claim_whatsapp_message(message_id: Optional[str]) -> bool:
     return bool(redis_client.set(key, "1", nx=True, ex=WHATSAPP_MESSAGE_DEDUPE_TTL_SECONDS))
 
 
+def release_whatsapp_message_claim(message_id: Optional[str]) -> None:
+    if message_id:
+        redis_client.delete(f"wamid:{message_id}")
+
+
 async def notify_vendor(vendor_phone: str, message: str) -> bool:
     if not vendor_phone:
         logger.warning("Vendor phone missing - cannot notify vendor")
