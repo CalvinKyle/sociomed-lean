@@ -9,6 +9,7 @@ def _reload_config(monkeypatch, **env):
     managed_keys = {
         "APP_ENV",
         "WHATSAPP_PROVIDER",
+        "ASYNC_WHATSAPP_PROCESSING",
         "VERIFY_TOKEN",
         "WHATSAPP_TOKEN",
         "PHONE_NUMBER_ID",
@@ -65,6 +66,18 @@ def test_build_redis_url_preserves_credentials_and_switches_databases(monkeypatc
 
     assert config.build_redis_url() == "redis://default:s3cr3t@redis.example.com:6379/0"
     assert config.build_redis_url(db=1) == "redis://default:s3cr3t@redis.example.com:6379/1"
+
+
+def test_async_whatsapp_processing_defaults_to_enabled(monkeypatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.ASYNC_WHATSAPP_PROCESSING is True
+
+
+def test_async_whatsapp_processing_can_be_disabled_for_sandbox(monkeypatch):
+    config = _reload_config(monkeypatch, ASYNC_WHATSAPP_PROCESSING="false")
+
+    assert config.ASYNC_WHATSAPP_PROCESSING is False
 
 
 def test_validate_config_allows_local_start_without_whatsapp_credentials(monkeypatch):
@@ -138,6 +151,7 @@ def test_validate_config_accepts_complete_twilio_production_settings(monkeypatch
         monkeypatch,
         APP_ENV="production",
         WHATSAPP_PROVIDER="twilio",
+        ASYNC_WHATSAPP_PROCESSING="false",
         DATABASE_URL="sqlite:///./test.db",
         REDIS_HOST="localhost",
         GOOGLE_CREDS_JSON="{}",
@@ -151,3 +165,4 @@ def test_validate_config_accepts_complete_twilio_production_settings(monkeypatch
     )
 
     config.validate_config()
+    assert config.ASYNC_WHATSAPP_PROCESSING is False
