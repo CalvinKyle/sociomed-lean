@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from twilio.request_validator import RequestValidator
@@ -14,6 +15,15 @@ def _client():
     app = FastAPI()
     app.include_router(routes.router)
     return TestClient(app)
+
+
+def _twilio_payload(message_id: str = "SM123") -> dict[str, str]:
+    return {
+        "MessageSid": message_id,
+        "From": "whatsapp:+256700111111",
+        "Body": "hello",
+        "NumMedia": "0",
+    }
 
 
 def test_extract_twilio_text_message_normalizes_whatsapp_sender():
@@ -66,35 +76,114 @@ def test_twilio_signature_validation_uses_configured_public_url(monkeypatch):
     assert routes._verify_twilio_signature(request, form_data, signature, public_url) is True
 
 
-def test_twilio_webhook_enqueues_internal_message(monkeypatch):
+def test_twilio_webhook_processes_message_synchronously(monkeypatch):
     client = _client()
+    processed = []
     queued = []
 
+    async def fake_process_now(message):
+        processed.append(message)
+
+    monkeypatch.setattr(routes, "ASYNC_WHATSAPP_PROCESSING", False)
     monkeypatch.setattr(routes, "_verify_twilio_signature", lambda *_args: True)
     monkeypatch.setattr(routes, "claim_whatsapp_message", lambda _message_id: True)
+    monkeypatch.setattr(routes, "process_whatsapp_message_now", fake_process_now)
     monkeypatch.setattr(routes.process_whatsapp_message, "delay", lambda message: queued.append(message))
 
     response = client.post(
         "/api/webhook/twilio",
-        data={
-            "MessageSid": "SM123",
-            "From": "whatsapp:+256700111111",
-            "Body": "hello",
-            "NumMedia": "0",
-        },
+        data=_twilio_payload(),
         headers={"X-Twilio-Signature": "test-signature"},
     )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/xml")
-    assert queued == [
-        {
-            "id": "SM123",
-            "from": "+256700111111",
-            "type": "text",
-            "text": {"body": "hello"},
-        }
-    ]
+    assert len(processed) == 1
+    assert processed[0]["id"] == "SM123"
+    assert queued == []
+
+
+def test_twilio_webhook_enqueues_message_when_async_processing_is_enabled(monkeypatch):
+    client = _client()
+    processed = []
+    queued = []
+
+    async def fake_process_now(message):
+        processed.append(message)
+
+    monkeypatch.setattr(routes, "ASYNC_WHATSAPP_PROCESSING", True)
+    monkeypatch.setattr(routes, "_verify_twilio_signature", lambda *_args: True)
+    monkeypatch.setattr(routes, "claim_whatsapp_message", lambda _message_id: True)
+    monkeypatch.setattr(routes, "process_whatsapp_message_now", fake_process_now)
+    monkeypatch.setattr(routes.process_whatsapp_message, "delay", lambda message: queued.append(message))
+
+    response = client.post(
+        "/api/webhook/twilio",
+        data=_twilio_payload(),
+        headers={"X-Twilio-Signature": "test-signature"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert len(queued) == 1
+    assert queued[0]["id"] == "SM123"
+    assert processed == []
+
+
+@pytest.mark.parametrize("async_enabled", [False, True])
+def test_twilio_webhook_skips_duplicate_in_both_processing_modes(monkeypatch, async_enabled):
+    client = _client()
+    processed = []
+    queued = []
+
+    async def fake_process_now(message):
+        processed.append(message)
+
+    monkeypatch.setattr(routes, "ASYNC_WHATSAPP_PROCESSING", async_enabled)
+    monkeypatch.setattr(routes, "_verify_twilio_signature", lambda *_args: True)
+    monkeypatch.setattr(routes, "claim_whatsapp_message", lambda _message_id: False)
+    monkeypatch.setattr(routes, "process_whatsapp_message_now", fake_process_now)
+    monkeypatch.setattr(routes.process_whatsapp_message, "delay", lambda message: queued.append(message))
+
+    response = client.post(
+        "/api/webhook/twilio",
+        data=_twilio_payload("SM-DUPLICATE"),
+        headers={"X-Twilio-Signature": "test-signature"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert processed == []
+    assert queued == []
+
+
+@pytest.mark.parametrize("async_enabled", [False, True])
+def test_twilio_webhook_releases_claim_when_processing_start_fails(monkeypatch, async_enabled):
+    client = _client()
+    released_claims = []
+
+    async def fail_inline(_message):
+        raise RuntimeError("inline processing failed")
+
+    def fail_enqueue(_message):
+        raise RuntimeError("Celery enqueue failed")
+
+    monkeypatch.setattr(routes, "ASYNC_WHATSAPP_PROCESSING", async_enabled)
+    monkeypatch.setattr(routes, "_verify_twilio_signature", lambda *_args: True)
+    monkeypatch.setattr(routes, "claim_whatsapp_message", lambda _message_id: True)
+    monkeypatch.setattr(routes, "release_whatsapp_message_claim", released_claims.append)
+    monkeypatch.setattr(routes, "process_whatsapp_message_now", fail_inline)
+    monkeypatch.setattr(routes.process_whatsapp_message, "delay", fail_enqueue)
+
+    response = client.post(
+        "/api/webhook/twilio",
+        data=_twilio_payload("SM-RETRY"),
+        headers={"X-Twilio-Signature": "test-signature"},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"status": "error"}
+    assert released_claims == ["SM-RETRY"]
 
 
 def test_twilio_webhook_rejects_invalid_signature(monkeypatch):
@@ -103,7 +192,7 @@ def test_twilio_webhook_rejects_invalid_signature(monkeypatch):
 
     response = client.post(
         "/api/webhook/twilio",
-        data={"MessageSid": "SM123", "From": "whatsapp:+256700111111", "Body": "hello"},
+        data=_twilio_payload(),
         headers={"X-Twilio-Signature": "invalid"},
     )
 
