@@ -23,7 +23,7 @@ def format_results(product_name, results, currency="UGX"):
         return "No options available. Type 0 to return to the menu.", []
 
     msg = (
-        f"*{product_name} – Available Supplier Offers*\n\n"
+        f"*{product_name} – Available Options*\n\n"
         "Reply with the offer number you want to request.\n\n"
     )
     option_map = []
@@ -34,11 +34,16 @@ def format_results(product_name, results, currency="UGX"):
         uom = item.get("uom") or "unit"
         sku = item.get("sku")
 
-        msg += f"*{counter}. {item['brand']}* from {item.get('vendor_name', 'Supplier')}\n"
+        msg += f"*{counter}. {item['brand']}*\n"
         if sku:
             msg += f"SKU: {sku}\n"
         msg += f"UoM: {uom} | {format_price_range(min_price, max_price, currency)}\n"
-        msg += f"Min qty: {item.get('min_qty', 1)} {uom} | Stock: {item.get('stock_qty', 0)} {uom} | Lead time: {item.get('lead_time_days', 'N/A')} days\n"
+        availability = "Available" if (item.get("stock_qty") or 0) > 0 else "Sourcing available"
+        msg += (
+            f"Min qty: {item.get('min_qty', 1)} {uom} | "
+            f"Availability: {availability} | "
+            f"Indicative lead time: {item.get('lead_time_days', 'TBC')} days\n"
+        )
         msg += format_pricing_tiers(item["pricing"], currency, uom=uom) + "\n\n"
 
         option_map.append({
