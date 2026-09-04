@@ -2,13 +2,19 @@
 
 The Twilio integration is configured through environment variables. Real credentials must be stored in Twilio and Render, never committed to git.
 
+For low-volume Sandbox testing, set `ASYNC_WHATSAPP_PROCESSING=false`. The Render web service will process each inbound message directly and no paid Celery background worker is required. Redis remains required for conversation sessions, caching, sender locks, and duplicate-message protection.
+
 ## What Was Added
 
 - `WHATSAPP_PROVIDER=twilio` switches outbound WhatsApp delivery from Meta Cloud API to Twilio.
 - `POST /api/webhook/twilio` accepts Twilio's form-encoded inbound WhatsApp webhooks.
-- `X-Twilio-Signature` is validated with the Twilio Auth Token before a message is queued.
+- `X-Twilio-Signature` is validated with the Twilio Auth Token before processing.
+- `ASYNC_WHATSAPP_PROCESSING=false` runs the existing WhatsApp handler inside the web request.
+- `ASYNC_WHATSAPP_PROCESSING=true` preserves the Celery queue and worker architecture for production.
 - `POST /api/webhook/twilio/status` records Twilio delivery status callbacks in the audit log.
-- Incoming Twilio payloads are translated into the existing SocioMed conversation flow, so the catalog, RFQ, supplier notification, and sales handoff behavior stays unchanged.
+- Incoming Twilio payloads are translated into the existing SocioMed conversation flow, so catalog, RFQ, supplier notification, and sales handoff behavior stays unchanged.
+
+Both modes use the same message-processing service and Redis session lock. If inline processing fails, the message's duplicate-protection claim is released and the webhook returns an error so Twilio can retry.
 
 ## 1. Get the Twilio Values
 
@@ -32,14 +38,15 @@ Use the exact Sandbox sender shown in your Twilio Console. Do not assume the exa
 
 Every tester must join the Sandbox before the Sandbox can exchange WhatsApp messages with that phone number.
 
-## 3. Add Secrets in Render
+## 3. Configure the Render Web Service
 
-In the Render dashboard, open each service and go to **Environment**.
+In the Render dashboard, open the existing `sociomed-lean` web service and go to **Environment**.
 
-Set these on `sociomed-lean` and `sociomed-lean-celery-worker`:
+Set:
 
 ```text
 WHATSAPP_PROVIDER=twilio
+ASYNC_WHATSAPP_PROCESSING=false
 TWILIO_ACCOUNT_SID=AC...
 TWILIO_AUTH_TOKEN=your-real-primary-auth-token
 TWILIO_WHATSAPP_FROM=whatsapp:+YOUR_TWILIO_SANDBOX_NUMBER
@@ -48,11 +55,11 @@ TWILIO_STATUS_CALLBACK_URL=https://YOUR-SERVICE.onrender.com/api/webhook/twilio/
 PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
 ```
 
-Set the outbound Twilio values on `sociomed-lean-celery-beat` too if the scheduled RFQ digest remains enabled.
-
 Keep the existing Postgres, Redis, Google Sheets, `SALES_AGENT_PHONE`, and `API_KEY` production variables configured. Production startup validation still requires them.
 
-The `render.yaml` blueprint now contains `sync: false` secret slots. Render will prompt for these values during a new Blueprint deployment, or you can enter them manually in each service's Environment page.
+You can suspend or omit the Celery worker during Sandbox testing. Do not remove Redis: the synchronous path still uses it for sessions, caching, duplicate-message claims, and sender locks.
+
+The `render.yaml` web-service configuration now recommends `ASYNC_WHATSAPP_PROCESSING=false`. The Celery worker definition remains available for later production deployment.
 
 ## 4. Configure the Twilio Sandbox Webhook
 
@@ -66,15 +73,15 @@ The URL in Twilio and `TWILIO_WEBHOOK_URL` must match exactly, including `https`
 
 The application sends `TWILIO_STATUS_CALLBACK_URL` with every outbound message, so no separate Sandbox status URL is required.
 
-## 5. Deploy
+## 5. Deploy Without a Celery Worker
 
 The Render blueprint has `autoDeploy: false`, so deploy the updated branch or merged pull request manually:
 
-1. Deploy `sociomed-lean`.
-2. Deploy `sociomed-lean-celery-worker`.
-3. Deploy `sociomed-lean-celery-beat` if it is enabled.
+1. Set `ASYNC_WHATSAPP_PROCESSING=false` on the web service.
+2. Deploy `sociomed-lean`.
+3. Leave the Celery worker suspended or undeployed for Sandbox testing.
 4. Verify `GET https://YOUR-SERVICE.onrender.com/api/health/liveness` returns `{"status":"ok"}`.
-5. Check the web and worker logs for configuration errors before sending a WhatsApp message.
+5. Check the web-service logs for configuration errors before sending a WhatsApp message.
 
 ## 6. Beta Smoke Test
 
@@ -89,22 +96,35 @@ From a phone that joined the Sandbox:
 
 Twilio/WhatsApp free-form replies are intended for the active customer-service conversation window. For proactive messages outside that window, configure approved WhatsApp Content Templates before production use.
 
+## Switching Back to Celery for Production
+
+When traffic or processing time grows:
+
+1. Deploy and configure `sociomed-lean-celery-worker` with the same Twilio, Postgres, and Redis values as the web service.
+2. Confirm the worker is healthy.
+3. Set `ASYNC_WHATSAPP_PROCESSING=true` on the web service.
+4. Redeploy the web service.
+5. Send a test message and confirm the web service queues it and the worker processes it.
+
+Do not set the flag to `true` unless a working Celery worker is connected to the same Redis instance.
+
 ## Local Testing With ngrok
 
-For local testing only:
+For local Sandbox testing:
 
 ```bash
 uvicorn app.main:app --reload
-celery -A app.core.celery_app worker --loglevel=info
 ngrok http 8000
 ```
 
-Copy `.env.example` to `.env.local`, replace the ngrok placeholder with the current HTTPS forwarding hostname, and use that exact URL in Twilio Sandbox settings. Restart the API after changing `.env.local`.
+Set `ASYNC_WHATSAPP_PROCESSING=false` in `.env.local`; a local Celery worker is not needed. Replace the ngrok placeholder with the current HTTPS forwarding hostname and use that exact URL in Twilio Sandbox settings. Restart the API after changing `.env.local`.
 
 ## Troubleshooting
 
 - `403 invalid Twilio webhook signature`: confirm the primary Auth Token is correct and the configured webhook URL exactly matches Twilio's URL.
-- Webhook returns `200` but no WhatsApp reply arrives: confirm the Celery worker is running and has the same Twilio and Redis values as the web service.
+- Webhook returns `500`: inspect the web-service log. The message claim is released so a Twilio retry can process it again.
+- Webhook returns `200` but no WhatsApp reply arrives: confirm `ASYNC_WHATSAPP_PROCESSING=false`, verify the Twilio credentials, and inspect outbound delivery status logs.
+- Messages remain queued with `ASYNC_WHATSAPP_PROCESSING=true`: deploy a Celery worker using the same Redis URL.
 - Twilio error `63007`: confirm `TWILIO_WHATSAPP_FROM` is the Sandbox or approved WhatsApp sender assigned to the account.
 - Tester receives nothing: confirm that phone joined the Sandbox and that the WhatsApp conversation window is active.
-- Credentials were pasted into git or a public log: rotate the Twilio Auth Token immediately, update Render, and redeploy the web and worker services.
+- Credentials were pasted into git or a public log: rotate the Twilio Auth Token immediately, update Render, and redeploy the web service.
