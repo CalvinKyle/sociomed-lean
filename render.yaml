@@ -19,6 +19,8 @@ services:
         value: "1"
       - key: WHATSAPP_PROVIDER
         value: twilio
+      - key: ASYNC_WHATSAPP_PROCESSING
+        value: "false"
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
