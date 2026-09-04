@@ -35,6 +35,7 @@ from app.services.rfq_triage import (
     parse_direct_rfq_message,
 )
 from app.services.search import find_products, get_results
+from app.services.procurement_policy import is_equipment_product
 from app.services.whatsapp_intent import BuyerIntent, classify_entry_intent
 from app.core.cache import get_cached_data
 
@@ -310,6 +311,8 @@ async def _create_whatsapp_rfq(
     vendor_phone: Optional[str] = None,
     notes: Optional[str] = None,
     currency: str = "UGX",
+    equipment_review_required: bool = False,
+    manual_review_reason: Optional[str] = None,
 ) -> tuple[int, bool]:
     db = SessionLocal()
     try:
@@ -329,6 +332,10 @@ async def _create_whatsapp_rfq(
                 notes=notes,
                 currency=currency,
                 source=source,
+                procurement_stage="formal_purchase",
+                formal_quote=True,
+                equipment_review_required=equipment_review_required,
+                manual_review_reason=manual_review_reason,
             ),
         )
     finally:
@@ -960,6 +967,12 @@ async def handle_incoming_message(message: Dict):
                     f"UoM: {selected.get('uom', 'unit')}"
                 ),
                 currency=currency,
+                equipment_review_required=is_equipment_product(product),
+                manual_review_reason=(
+                    "equipment_technical_review"
+                    if is_equipment_product(product)
+                    else None
+                ),
             )
         except Exception as exc:
             log_audit_event(sender, "whatsapp_rfq_failed", {"error": str(exc)})
@@ -1012,6 +1025,18 @@ async def handle_incoming_message(message: Dict):
                 source=rfq_payload.source,
                 notes=rfq_payload.notes,
                 currency=currency,
+                equipment_review_required=is_equipment_product(
+                    {"name": rfq_payload.product_name}
+                ),
+                manual_review_reason=(
+                    "complex_multi_item_review"
+                    if rfq_payload.is_bulk and is_complex_bulk_request(rfq_payload.product_name)
+                    else (
+                        "equipment_technical_review"
+                        if is_equipment_product({"name": rfq_payload.product_name})
+                        else None
+                    )
+                ),
             )
         except Exception as exc:
             log_audit_event(sender, "direct_whatsapp_rfq_failed", {"error": str(exc)})
