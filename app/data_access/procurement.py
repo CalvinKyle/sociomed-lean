@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.db import BuyerLead, RFQLineItem, RFQRequest
+from app.models.db import BuyerLead, BuyerProfile, RFQLineItem, RFQRequest
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
 
 
@@ -48,6 +48,13 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
         currency=payload.currency,
         source=payload.source,
         status="new",
+        procurement_stage=payload.procurement_stage,
+        formal_quote=payload.formal_quote,
+        required_by=payload.required_by,
+        payment_preference=payload.payment_preference,
+        destination_country=payload.destination_country,
+        equipment_review_required=payload.equipment_review_required,
+        manual_review_reason=payload.manual_review_reason,
     )
     db.add(rfq)
     db.flush()
@@ -67,9 +74,27 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
             )
         )
 
+    profile = db.get(BuyerProfile, payload.phone.strip())
+    if profile is None:
+        profile = BuyerProfile(
+            phone=payload.phone.strip(),
+            contact_name=payload.buyer_name.strip(),
+            organization=payload.organization.strip(),
+        )
+        db.add(profile)
+    profile.contact_name = payload.buyer_name.strip()
+    profile.organization = payload.organization.strip()
+    profile.delivery_location = payload.delivery_location.strip()
+    profile.destination_country = payload.destination_country if hasattr(profile, "destination_country") else None
+    profile.preferred_currency = payload.currency
+
     db.commit()
     db.refresh(rfq)
     return rfq
+
+
+def get_buyer_profile(db: Session, phone: str) -> BuyerProfile | None:
+    return db.get(BuyerProfile, phone.strip())
 
 
 def get_rfq_line_items(db: Session, rfq_id: int) -> list[RFQLineItem]:
