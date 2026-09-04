@@ -51,8 +51,9 @@ REDIS_DB = int(os.getenv("REDIS_DB", str(_default_redis_db)))
 
 # App settings
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", 300))
-SESSION_TTL = int(os.getenv("SESSION_TTL", 1800))
-SESSION_VERSION = int(os.getenv("SESSION_VERSION", "1"))
+SMALL_RFQ_MAX_ITEMS = int(os.getenv("SMALL_RFQ_MAX_ITEMS", "5"))
+SESSION_TTL = int(os.getenv("SESSION_TTL", 3600))
+SESSION_VERSION = int(os.getenv("SESSION_VERSION", "2"))
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "UGX")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "sales@socio-med.com")
