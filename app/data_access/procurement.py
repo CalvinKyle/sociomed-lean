@@ -85,7 +85,8 @@ def create_rfq_record(db: Session, payload: RFQCreate) -> RFQRequest:
     profile.contact_name = payload.buyer_name.strip()
     profile.organization = payload.organization.strip()
     profile.delivery_location = payload.delivery_location.strip()
-    profile.destination_country = payload.destination_country if hasattr(profile, "destination_country") else None
+    if payload.destination_country:
+        profile.country = payload.destination_country
     profile.preferred_currency = payload.currency
 
     db.commit()
