@@ -12,6 +12,7 @@ from twilio.request_validator import RequestValidator
 
 from app.core.auth import require_api_key
 from app.core.config import (
+    ASYNC_WHATSAPP_PROCESSING,
     GOOGLE_CREDS_FILE,
     GOOGLE_CREDS_JSON,
     TWILIO_AUTH_TOKEN,
@@ -22,7 +23,12 @@ from app.core.config import (
 )
 from app.core.rate_limit import limiter
 from app.core.rfq_status import InvalidRFQStatus
-from app.core.utils import claim_whatsapp_message, log_audit_event, redis_client
+from app.core.utils import (
+    claim_whatsapp_message,
+    log_audit_event,
+    redis_client,
+    release_whatsapp_message_claim,
+)
 from app.data_access.catalog import get_categories
 from app.data_access.funnel import record_funnel_event
 from app.data_access.procurement import get_rfq_line_items
@@ -50,6 +56,7 @@ from app.services.procurement import (
 from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
 from app.services.tasks import process_whatsapp_message
 from app.services.twilio_adapter import extract_twilio_message
+from app.services.whatsapp_processing import process_whatsapp_message_now
 from app.services.whatsapp_service import extract_message
 
 router = APIRouter(prefix="/api")
@@ -304,6 +311,8 @@ async def twilio_whatsapp_webhook(
     request: Request,
     x_twilio_signature: str | None = Header(default=None, alias="X-Twilio-Signature"),
 ):
+    processing_mode = "celery" if ASYNC_WHATSAPP_PROCESSING else "synchronous"
+
     try:
         body_bytes = await request.body()
         form_data = _parse_twilio_form(body_bytes)
@@ -314,21 +323,34 @@ async def twilio_whatsapp_webhook(
         if not message:
             return _empty_twiml_response()
 
-        if not claim_whatsapp_message(message.get("id")):
+        message_id = message.get("id")
+        if not claim_whatsapp_message(message_id):
             log_audit_event(
                 message.get("from", "unknown"),
                 "webhook_duplicate_message_skipped",
-                {"message_id": message.get("id"), "provider": "twilio"},
+                {"message_id": message_id, "provider": "twilio"},
             )
             return _empty_twiml_response()
 
-        process_whatsapp_message.delay(message)
+        try:
+            if ASYNC_WHATSAPP_PROCESSING:
+                process_whatsapp_message.delay(message)
+            else:
+                await process_whatsapp_message_now(message)
+        except Exception:
+            release_whatsapp_message_claim(message_id)
+            raise
+
         return _empty_twiml_response()
 
     except HTTPException:
         raise
     except Exception as exc:
-        log_audit_event("system", "webhook_error", {"error": str(exc), "provider": "twilio"})
+        log_audit_event(
+            "system",
+            "webhook_error",
+            {"error": str(exc), "provider": "twilio", "processing_mode": processing_mode},
+        )
         return JSONResponse(status_code=500, content={"status": "error"})
 
 
