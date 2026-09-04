@@ -18,6 +18,7 @@ from app.core.validators import (
 )
 from app.data_access.catalog import get_categories, get_products_by_category
 from app.data_access.funnel import record_funnel_event
+from app.data_access.procurement import get_buyer_profile
 from app.models.db import SessionLocal
 from app.models.formatter import format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
@@ -286,6 +287,26 @@ def _parse_buyer_facility_details(text: str) -> tuple[str, str, str]:
     return parts[0], parts[1], ", ".join(parts[2:])
 
 
+def _load_buyer_profile(sender: str) -> Optional[Dict]:
+    db = SessionLocal()
+    try:
+        profile = get_buyer_profile(db, sender)
+        if not profile:
+            return None
+        return {
+            "contact_name": profile.contact_name,
+            "organization": profile.organization,
+            "delivery_location": profile.delivery_location,
+            "country": profile.country,
+            "preferred_currency": profile.preferred_currency,
+        }
+    except Exception as exc:
+        logger.warning("buyer_profile_unavailable sender=%s error=%s", sender, exc)
+        return None
+    finally:
+        db.close()
+
+
 def _log_user_input(sender: str, state: str, text: str) -> None:
     logger.info("whatsapp_input sender=%s state=%s text=%s", sender, state, text[:200])
 
@@ -453,7 +474,12 @@ async def handle_incoming_message(message: Dict):
         if entry_intent.intent == BuyerIntent.GREETING or (
             entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "menu"
         ):
-            await send_whatsapp_message(sender, _main_menu())
+            profile = _load_buyer_profile(sender)
+            greeting = _main_menu()
+            if profile:
+                first_name = profile["contact_name"].split()[0]
+                greeting = f"Welcome back, {first_name}.\n\n" + greeting
+            await send_whatsapp_message(sender, greeting)
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
@@ -471,12 +497,22 @@ async def handle_incoming_message(message: Dict):
         if entry_intent.intent in {BuyerIntent.FORMAL_PURCHASE, BuyerIntent.MULTI_ITEM} or (
             entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "quote"
         ):
-            await send_whatsapp_message(sender, _direct_rfq_prompt())
+            profile = _load_buyer_profile(sender)
+            prompt = _direct_rfq_prompt()
+            if profile and profile.get("delivery_location"):
+                prompt = (
+                    f"Welcome back, {profile['contact_name'].split()[0]}. "
+                    f"Reply item | quantity to reuse {profile['organization']} and "
+                    f"{profile['delivery_location']}, or use the full format to change them.\n\n"
+                    + prompt
+                )
+            await send_whatsapp_message(sender, prompt)
             _transition_session(
                 sender,
                 current_state,
                 ConversationState.DIRECT_RFQ,
                 formal_purchase=True,
+                buyer_profile=profile,
             )
             return
 
@@ -991,7 +1027,10 @@ async def handle_incoming_message(message: Dict):
         return
 
     if current_state == ConversationState.DIRECT_RFQ.value:
-        rfq_payload = parse_direct_rfq_message(text)
+        rfq_payload = parse_direct_rfq_message(
+            text,
+            buyer_profile=session.get("buyer_profile"),
+        )
         if not rfq_payload:
             await send_whatsapp_message(
                 sender,
