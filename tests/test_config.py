@@ -19,6 +19,7 @@ def _reload_config(monkeypatch, **env):
         "TWILIO_WHATSAPP_FROM",
         "TWILIO_WEBHOOK_URL",
         "TWILIO_STATUS_CALLBACK_URL",
+        "RENDER_EXTERNAL_URL",
         "GOOGLE_CREDS_FILE",
         "GOOGLE_CREDS_JSON",
         "SHEET_NAME",
@@ -77,10 +78,10 @@ def test_intent_flow_runtime_defaults(monkeypatch):
     assert config.SMALL_RFQ_MAX_ITEMS == 5
 
 
-def test_async_whatsapp_processing_defaults_to_enabled(monkeypatch):
+def test_async_whatsapp_processing_defaults_to_inline(monkeypatch):
     config = _reload_config(monkeypatch)
 
-    assert config.ASYNC_WHATSAPP_PROCESSING is True
+    assert config.ASYNC_WHATSAPP_PROCESSING is False
 
 
 def test_async_whatsapp_processing_can_be_disabled_for_sandbox(monkeypatch):
@@ -122,9 +123,39 @@ def test_validate_config_requires_whatsapp_and_public_routing_in_production(monk
     assert "VERIFY_TOKEN" in message
     assert "WHATSAPP_TOKEN" in message
     assert "PHONE_NUMBER_ID" in message
-    assert "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE" in message
     assert "PUBLIC_BASE_URL" in message
-    assert "API_KEY" in message
+    assert "API_KEY" not in message
+
+
+def test_validate_config_rejects_local_database_fallbacks_in_production(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        VERIFY_TOKEN="verify-token",
+        WHATSAPP_TOKEN="meta-token",
+        PHONE_NUMBER_ID="123",
+        WHATSAPP_APP_SECRET="app-secret",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        API_KEY="api-key",
+    )
+
+    with pytest.raises(Exception) as exc:
+        config.validate_config()
+
+    message = str(exc.value)
+    assert "DATABASE_URL" in message
+    assert "REDIS_URL_OR_HOST" in message
+
+
+def test_render_external_url_supplies_public_and_twilio_callback_urls(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        RENDER_EXTERNAL_URL="https://sociomed-beta.onrender.com/",
+    )
+
+    assert config.PUBLIC_BASE_URL == "https://sociomed-beta.onrender.com"
+    assert config.TWILIO_WEBHOOK_URL == "https://sociomed-beta.onrender.com/api/webhook/twilio"
+    assert config.TWILIO_STATUS_CALLBACK_URL == "https://sociomed-beta.onrender.com/api/webhook/twilio/status"
 
 
 def test_validate_config_requires_twilio_credentials_when_twilio_is_selected(monkeypatch):
@@ -151,7 +182,8 @@ def test_validate_config_requires_twilio_credentials_when_twilio_is_selected(mon
     assert "TWILIO_ACCOUNT_SID" in message
     assert "TWILIO_AUTH_TOKEN" in message
     assert "TWILIO_WHATSAPP_FROM" in message
-    assert "TWILIO_WEBHOOK_URL" in message
+    assert "TWILIO_WEBHOOK_URL" not in message
+    assert config.TWILIO_WEBHOOK_URL == "https://sociomed-beta.onrender.com/api/webhook/twilio"
     assert "VERIFY_TOKEN" not in message
 
 

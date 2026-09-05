@@ -35,6 +35,8 @@ Once deployed, these are the endpoints worth handing to your first design partne
   Receives signed incoming WhatsApp messages from the Twilio Sandbox or an approved Twilio sender.
 - `POST /api/webhook/twilio/status`
   Receives signed Twilio delivery status callbacks.
+- `GET /api/health/twilio`
+  Warms a free Render service and verifies the worker-free Sandbox configuration, schema, database, and Redis without exposing secrets.
 - `POST /api/webhook`
   Retains support for incoming WhatsApp messages from Meta Cloud API.
 
@@ -74,7 +76,7 @@ These are the concrete setup sections you need to address next:
 6. Database and Redis
    Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=3600`, `SESSION_VERSION=2`, `SMALL_RFQ_MAX_ITEMS=5`, and `CACHE_TTL_SECONDS=300`.
 7. Render deployment
-   Sandbox mode needs the web service, Redis, and Postgres. Production async mode also needs a Celery worker sharing the same provider credentials and Redis instance.
+   Free Sandbox mode needs only the web service, Key Value, and Postgres. The Docker start script applies Alembic migrations before starting a single Gunicorn worker.
 
 Use [.env.example](.env.example) for local machines and [.env.production.example](.env.production.example) for production values. The examples contain placeholders only; real credentials belong in `.env.local` or the Render Environment page.
 
@@ -135,7 +137,7 @@ Before outreach, make sure these are done:
 1. Load a high-confidence catalog into Sheets, then run `python3 sync_sheets_to_db.py`.
 2. Set `SALES_AGENT_PHONE` so every buyer request gets routed to a human.
 3. Deploy the API and verify authenticated `/api/health`, `/docs`, public `/api/catalog/featured`, and public `/api/catalog/search?q=gloves`.
-4. For Twilio beta, set `ASYNC_WHATSAPP_PROCESSING=false`, follow [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md), join each tester to the Sandbox, and point the Sandbox webhook to `/api/webhook/twilio`.
+4. For Twilio beta, set `ASYNC_WHATSAPP_PROCESSING=false` and `RUN_DB_MIGRATIONS=true`, follow [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md), warm `/api/health/twilio`, join each tester to the Sandbox, and point the Sandbox webhook to `/api/webhook/twilio`.
 5. For Meta, connect the webhook to `/api/webhook` and confirm verification succeeds with `hub.verify_token`.
 6. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at authenticated `/api/leads` and `/api/rfqs`.
 7. Use procurement-language messaging in outreach: faster supplier comparison, RFQ turnaround, stock visibility, and WhatsApp-native ordering.
@@ -181,7 +183,7 @@ Run the test suite locally before opening a pull request. All pull requests are 
 
 ## Notes
 
-- Schema changes are handled only by Alembic migrations; run `alembic upgrade head` before starting or syncing.
+- Schema changes are handled only by Alembic migrations. Local environments run `alembic upgrade head` manually; the free Render web container runs it at startup when `RUN_DB_MIGRATIONS=true`.
 - Redis can be configured with either `REDIS_URL` or `REDIS_HOST` plus `REDIS_PORT`.
 - Swagger docs can be disabled in production with `ENABLE_OPEN_DOCS=false`.
 - Keep `TWILIO_AUTH_TOKEN`, Meta tokens, Google credentials, database passwords, and API keys out of git.

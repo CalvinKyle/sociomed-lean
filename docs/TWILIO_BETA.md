@@ -4,6 +4,8 @@ The Twilio integration is configured through environment variables. Real credent
 
 For low-volume Sandbox testing, set `ASYNC_WHATSAPP_PROCESSING=false`. The Render web service will process each inbound message directly and no paid Celery background worker is required. Redis remains required for conversation sessions, caching, sender locks, and duplicate-message protection.
 
+The free-tier deployment runs `alembic upgrade head` from `scripts/start_web.sh` before Gunicorn starts. This replaces Render's paid pre-deploy command for the beta environment.
+
 ## What Was Added
 
 - `WHATSAPP_PROVIDER=twilio` switches outbound WhatsApp delivery from Meta Cloud API to Twilio.
@@ -47,6 +49,8 @@ Set:
 ```text
 WHATSAPP_PROVIDER=twilio
 ASYNC_WHATSAPP_PROCESSING=false
+RUN_DB_MIGRATIONS=true
+WEB_CONCURRENCY=1
 SESSION_TTL=3600
 SESSION_VERSION=2
 SMALL_RFQ_MAX_ITEMS=5
@@ -58,11 +62,13 @@ TWILIO_STATUS_CALLBACK_URL=https://YOUR-SERVICE.onrender.com/api/webhook/twilio/
 PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
 ```
 
-Keep the existing Postgres, Redis, Google Sheets, `SALES_AGENT_PHONE`, and `API_KEY` production variables configured. Production startup validation still requires them.
+`PUBLIC_BASE_URL` and the two Twilio callback URLs can be derived from Render's automatic `RENDER_EXTERNAL_URL`, but keeping the explicit `TWILIO_WEBHOOK_URL` is recommended because it makes signature troubleshooting unambiguous.
+
+Postgres and Redis are runtime requirements. The Blueprint generates an `API_KEY`, but a missing key only disables protected HTTP endpoints and does not block WhatsApp startup. Google credentials are only needed when running the Sheets sync, and `SALES_AGENT_PHONE` is only needed to test the human handoff and sales notification path.
 
 You can suspend or omit the Celery worker during Sandbox testing. Do not remove Redis: the synchronous path still uses it for sessions, caching, duplicate-message claims, and sender locks.
 
-The `render.yaml` web-service configuration now recommends `ASYNC_WHATSAPP_PROCESSING=false`. The Celery worker definition remains available for later production deployment.
+The free-tier `render.yaml` intentionally defines only the web service, Postgres, and Key Value. Add worker services later when moving back to asynchronous processing.
 
 ## 4. Configure the Twilio Sandbox Webhook
 
@@ -76,19 +82,21 @@ The URL in Twilio and `TWILIO_WEBHOOK_URL` must match exactly, including `https`
 
 The application sends `TWILIO_STATUS_CALLBACK_URL` with every outbound message, so no separate Sandbox status URL is required.
 
-## 5. Deploy Without a Celery Worker
+## 5. Deploy and Migrate Without a Celery Worker
 
-The Render blueprint has `autoDeploy: false`, so deploy the updated branch or merged pull request manually:
+The Blueprint tracks `codex/twilio-whatsapp-beta` and deploys commits automatically. If the existing service is not managed by the Blueprint, set that branch and trigger a manual deploy in the dashboard.
 
-1. Set `ASYNC_WHATSAPP_PROCESSING=false` on the web service.
-2. Deploy `sociomed-lean`.
-3. Leave the Celery worker suspended or undeployed for Sandbox testing.
-4. Verify `GET https://YOUR-SERVICE.onrender.com/api/health/liveness` returns `{"status":"ok"}`.
-5. Check the web-service logs for configuration errors before sending a WhatsApp message.
+1. Set `ASYNC_WHATSAPP_PROCESSING=false` and `RUN_DB_MIGRATIONS=true` on the web service.
+2. Deploy `sociomed-lean`; the container retries `alembic upgrade head` before starting Gunicorn.
+3. Leave the Celery worker, beat, and Flower undeployed.
+4. Wait for the deploy log to show the migration reaching the current head and Gunicorn starting.
+5. Open `GET https://YOUR-SERVICE.onrender.com/api/health/twilio` until it returns HTTP 200 with every check set to `true`.
+
+Render free web services sleep after inactivity. Always open the Twilio readiness URL and wait for it to return before sending the first Sandbox message of a test session.
 
 ## 6. Beta Smoke Test
 
-From a phone that joined the Sandbox:
+From a phone that joined the Sandbox, after `/api/health/twilio` reports `ready`:
 
 1. Send `hello` to the Twilio Sandbox WhatsApp number.
 2. Confirm the SocioMed main menu arrives.
@@ -126,9 +134,14 @@ Set `ASYNC_WHATSAPP_PROCESSING=false` in `.env.local`; a local Celery worker is 
 ## Troubleshooting
 
 - `403 invalid Twilio webhook signature`: confirm the primary Auth Token is correct and the configured webhook URL exactly matches Twilio's URL.
+- `/api/health/twilio` returns `503`: inspect the false check. It distinguishes provider, inline mode, credentials, callback URL, database, schema, and Redis failures without displaying secrets.
+- Deploy fails before Gunicorn starts: inspect the Alembic error. The start script retries database connectivity for up to one minute and refuses to run incompatible application code against an old schema.
+- Webhook returns `400 unsupported Twilio payload`: the callback is not a Programmable Messaging webhook. Confirm the Sandbox's **When a message comes in** field is being used, not a Conversations Service callback.
 - Webhook returns `500`: inspect the web-service log. The message claim is released so a Twilio retry can process it again.
 - Webhook returns `200` but no WhatsApp reply arrives: confirm `ASYNC_WHATSAPP_PROCESSING=false`, verify the Twilio credentials, and inspect outbound delivery status logs.
 - Messages remain queued with `ASYNC_WHATSAPP_PROCESSING=true`: deploy a Celery worker using the same Redis URL.
 - Twilio error `63007`: confirm `TWILIO_WHATSAPP_FROM` is the Sandbox or approved WhatsApp sender assigned to the account.
 - Tester receives nothing: confirm that phone joined the Sandbox and that the WhatsApp conversation window is active.
 - Credentials were pasted into git or a public log: rotate the Twilio Auth Token immediately, update Render, and redeploy the web service.
+
+Free Render Postgres instances expire after 30 days, and free Key Value instances can lose session/cache data when restarted. Recreate or upgrade the database when it expires; a Key Value reset only resets chat sessions and cache, not Postgres data.

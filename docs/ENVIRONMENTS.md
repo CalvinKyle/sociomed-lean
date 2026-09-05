@@ -3,7 +3,7 @@
 This repo supports two safe environment patterns:
 
 - Local machines: `.env.local` plus a local Google credentials file in `.secrets/`
-- Production: environment variables only, including `GOOGLE_CREDS_JSON`
+- Production: runtime environment variables in Render; Google credentials are only needed when a Sheets sync is run
 
 Real Twilio, Meta, Google, database, and application secrets must never be committed to git.
 
@@ -14,7 +14,7 @@ Set these in every environment:
 | Variable | Local value | Production value | Notes |
 | --- | --- | --- | --- |
 | `APP_ENV` | `development` | `production` | Production turns on stricter startup validation. |
-| `PUBLIC_BASE_URL` | `http://localhost:8000` | Your public HTTPS Render URL | Use the Render URL first if the custom domain is not live yet. |
+| `PUBLIC_BASE_URL` | `http://localhost:8000` | Optional explicit public HTTPS Render URL | On Render it falls back to the automatic `RENDER_EXTERNAL_URL`. |
 | `SUPPORT_EMAIL` | `sales@socio-med.com` | `sales@socio-med.com` | Buyer-facing contact. |
 | `SALES_AGENT_PHONE` | `+254700123456` | Your live E.164 operations number | Buyer leads and RFQs are forwarded here. |
 | `DEFAULT_CURRENCY` | `UGX` | `UGX` | Buyer phone prefixes still override this where supported. |
@@ -66,12 +66,12 @@ The Meta webhook URL is `https://YOUR-HOST/api/webhook`.
 
 ## 5. Google Sheets Sync
 
-Use one of these, not both:
+Use one of these, not both, only in the environment where the sync script runs:
 
 - Local machines:
   - `GOOGLE_CREDS_FILE=.secrets/google-service-account.json`
   - Put the downloaded Google service account JSON file at `.secrets/google-service-account.json`
-- Production:
+- Render or another sync runner:
   - Set `GOOGLE_CREDS_JSON` to the full service-account JSON as a single-line Render secret
 
 Use `SHEET_NAME=sociomed_db` in both environments.
@@ -91,10 +91,11 @@ Use the same database and Redis instance for the web service and Celery worker:
 | `DB_MAX_OVERFLOW` | `10` | Temporary extra DB connections |
 | `DB_POOL_RECYCLE_SECONDS` | `300` | Recycle stale DB connections |
 
-Health checks serve two distinct purposes:
+Health checks serve three distinct purposes:
 
 - `GET /api/health/liveness` is unauthenticated and returns only `{"status": "ok"}`.
-- `GET /api/health` requires `X-API-Key` and reports database, Redis, and Google Sheets credential checks.
+- `GET /api/health/twilio` is unauthenticated and checks the Sandbox configuration, current database schema, and Redis without exposing secrets.
+- `GET /api/health` requires `X-API-Key` and reports database, current schema, and Redis checks.
 
 Exchange rates can be overridden without a deploy:
 
@@ -114,11 +115,7 @@ For a Twilio Sandbox beta, only these services are required:
 
 Set `ASYNC_WHATSAPP_PROCESSING=false` on the web service. The Celery worker, Celery beat, and Flower services can remain suspended or undeployed during Sandbox testing.
 
-For later asynchronous production processing, the blueprint still defines:
-
-1. `sociomed-lean-celery-worker`
-2. `sociomed-lean-celery-beat`
-3. `sociomed-lean-flower`
+The free-tier Blueprint does not define a Celery worker, beat, or Flower service. Add those as paid services later if asynchronous processing is required.
 
 Important production rules:
 
@@ -126,7 +123,8 @@ Important production rules:
 - The web service and Celery worker must share WhatsApp credentials, Postgres, Redis, and sales-routing values.
 - The Celery beat service also needs outbound provider credentials if scheduled WhatsApp digests are enabled.
 - `render.yaml` uses `sync: false` for secrets, so add real values in the Render Environment page.
-- `autoDeploy` is disabled for the web service; deploy manually after changing code or environment variables.
+- The beta Blueprint tracks `codex/twilio-whatsapp-beta` with commit-triggered auto-deploys. An existing dashboard-managed service must be pointed to that branch separately.
+- `RUN_DB_MIGRATIONS=true` runs Alembic from the Docker start script because pre-deploy commands are unavailable on free web services.
 
 ## 8. Cross-Device Workflow
 
@@ -145,12 +143,12 @@ Use this pattern so your laptop, VS Code, Codex, and Render stay in sync without
 2. Set `WHATSAPP_PROVIDER=twilio` and `ASYNC_WHATSAPP_PROCESSING=false`.
 3. Add the real Twilio values to the Render web service.
 4. Keep Redis and Postgres connected; suspend the Celery worker.
-5. Run `alembic upgrade head`.
-6. Load the catalog with `python3 sync_sheets_to_db.py`.
+5. Set `RUN_DB_MIGRATIONS=true`; the web container applies `alembic upgrade head` during startup.
+6. Load the catalog from a machine that has Google credentials with `python3 sync_sheets_to_db.py`.
 7. Join each tester to the Twilio WhatsApp Sandbox.
 8. Point the Twilio Sandbox `When a message comes in` URL to `/api/webhook/twilio` using `POST`.
-9. Verify `/api/health/liveness` and send `hello` from a joined WhatsApp tester.
-10. Complete a product search and test RFQ to confirm the full flow.
+9. Warm the free service and require `/api/health/twilio` to report `ready`.
+10. Send `hello`, then complete a product search and RFQ test.
 
 ## 10. Local Machine Bootstrap
 

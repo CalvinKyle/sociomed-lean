@@ -11,6 +11,11 @@ from app.core import utils
 from app.services.twilio_adapter import extract_twilio_message
 
 
+@pytest.fixture(autouse=True)
+def configure_twilio_provider(monkeypatch):
+    monkeypatch.setattr(routes, "WHATSAPP_PROVIDER", "twilio")
+
+
 def _client():
     app = FastAPI()
     app.include_router(routes.router)
@@ -197,6 +202,54 @@ def test_twilio_webhook_rejects_invalid_signature(monkeypatch):
     )
 
     assert response.status_code == 403
+
+
+def test_twilio_webhook_rejects_conversations_payload_instead_of_silently_ignoring(monkeypatch):
+    client = _client()
+    monkeypatch.setattr(routes, "_verify_twilio_signature", lambda *_args: True)
+
+    response = client.post(
+        "/api/webhook/twilio",
+        data={
+            "EventType": "onMessageAdded",
+            "ConversationSid": "CH123",
+            "MessageSid": "IM123",
+            "Author": "whatsapp:+256700111111",
+            "Body": "hello",
+        },
+        headers={"X-Twilio-Signature": "test-signature"},
+    )
+
+    assert response.status_code == 400
+    assert "Programmable Messaging" in response.json()["detail"]
+
+
+def test_twilio_readiness_reports_worker_free_sandbox_dependencies(monkeypatch):
+    class FakeSession:
+        def execute(self, _statement):
+            return None
+
+        def close(self):
+            return None
+
+    client = _client()
+    monkeypatch.setattr(routes, "ASYNC_WHATSAPP_PROCESSING", False)
+    monkeypatch.setattr(routes, "TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setattr(routes, "TWILIO_AUTH_TOKEN", "auth-token")
+    monkeypatch.setattr(routes, "TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+    monkeypatch.setattr(
+        routes,
+        "TWILIO_WEBHOOK_URL",
+        "https://sociomed-beta.onrender.com/api/webhook/twilio",
+    )
+    monkeypatch.setattr(routes, "SessionLocal", FakeSession)
+    monkeypatch.setattr(routes, "redis_client", SimpleNamespace(ping=lambda: True))
+
+    response = client.get("/api/health/twilio")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert all(response.json()["checks"].values())
 
 
 def test_twilio_outbound_message_uses_configured_credentials(monkeypatch):
