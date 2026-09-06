@@ -54,6 +54,19 @@ uvicorn app.main:app --reload
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) to test the procurement endpoints.
 
+Each successful catalog sync records one transactional version. Inspect recent
+versions or drill into changes without loading Google Sheets again:
+
+```bash
+python3 sync_sheets_to_db.py --list-versions 20
+python3 sync_sheets_to_db.py --version-changes 12
+python3 sync_sheets_to_db.py --entity-history JMS-0826
+```
+
+Invalid rows are skipped and recorded with their validation reason. Valid rows
+continue to sync; repeated unchanged rows are not written or added to the change
+log.
+
 Twilio beta guide: [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md)
 Production environment reference: [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md)
 Data blueprint reference: [docs/DATA_BLUEPRINT.md](docs/DATA_BLUEPRINT.md)

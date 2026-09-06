@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import Dict, List
 
 
@@ -92,6 +93,21 @@ KNOWN_E164_PREFIXES = ("211", "243", "250", "254", "255", "256", "257", "258")
 MULTI_VALUE_SEPARATOR_PATTERN = r"\s*(?:\||;|,)\s*"
 
 
+@dataclass(frozen=True)
+class CatalogValidationIssue:
+    tab_name: str
+    row_number: int | None
+    entity_id: str
+    reason: str
+    row: Dict
+
+
+@dataclass(frozen=True)
+class CatalogValidationResult:
+    data: Dict[str, List[Dict]]
+    skipped: List[CatalogValidationIssue]
+
+
 def normalize_sheet_header(header: str) -> str:
     cleaned = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(header).strip())
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", cleaned)
@@ -163,113 +179,156 @@ def _number(value, *, field: str, row_number: int) -> float:
         raise ValueError(f"pricing row {row_number}: {field} must be numeric") from exc
 
 
-def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> None:
-    """Fail a catalog sync before any database writes when key rows or links are unsafe."""
-    errors: list[str] = []
+def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> CatalogValidationResult:
+    """Return only valid rows, preserving every rejected row and its reasons."""
+    reasons: dict[tuple[str, int], list[str]] = {}
+    tab_issues: list[CatalogValidationIssue] = []
+
+    def reject(tab_name: str, index: int, reason: str) -> None:
+        bucket = reasons.setdefault((tab_name, index), [])
+        if reason not in bucket:
+            bucket.append(reason)
+
+    def surviving(tab_name: str) -> list[tuple[int, Dict]]:
+        return [
+            (index, row)
+            for index, row in enumerate(data.get(tab_name, []))
+            if (tab_name, index) not in reasons
+        ]
+
+    def ids(tab_name: str, field: str, *, valid_only: bool) -> set[str]:
+        rows = surviving(tab_name) if valid_only else enumerate(data.get(tab_name, []))
+        return {
+            str(row.get(field, "")).strip()
+            for _, row in rows
+            if str(row.get(field, "")).strip()
+        }
+
+    def reject_fk(
+        tab_name: str,
+        field: str,
+        original_ids: set[str],
+        valid_ids: set[str],
+    ) -> None:
+        for index, row in surviving(tab_name):
+            value = str(row.get(field, "")).strip()
+            if not value:
+                continue
+            if value not in original_ids:
+                reject(tab_name, index, f"unknown {field} '{value}'")
+            elif value not in valid_ids:
+                reject(tab_name, index, f"{field} '{value}' did not pass validation")
 
     for tab_name in ("products", "vendors", "inventory", "pricing"):
         if not data.get(tab_name):
-            errors.append(f"{tab_name}: tab has no data rows")
+            tab_issues.append(
+                CatalogValidationIssue(
+                    tab_name=tab_name,
+                    row_number=None,
+                    entity_id="tab",
+                    reason=f"{tab_name}: tab has no data rows",
+                    row={},
+                )
+            )
 
     for tab_name, required_values in REQUIRED_ROW_VALUES.items():
-        for row_number, row in enumerate(data.get(tab_name, []), start=2):
+        for index, row in enumerate(data.get(tab_name, [])):
             missing = [field for field in required_values if row.get(field) in (None, "")]
             if missing:
-                errors.append(f"{tab_name} row {row_number}: missing {', '.join(missing)}")
+                reject(tab_name, index, f"missing {', '.join(missing)}")
 
     for tab_name, primary_key in PRIMARY_KEYS.items():
         seen: dict[str, int] = {}
-        for row_number, row in enumerate(data.get(tab_name, []), start=2):
+        for index, row in enumerate(data.get(tab_name, [])):
             value = str(row.get(primary_key, "")).strip()
             if not value:
                 continue
             if value in seen:
-                errors.append(
-                    f"{tab_name} row {row_number}: duplicate {primary_key} '{value}' "
-                    f"(first seen on row {seen[value]})"
+                reject(
+                    tab_name,
+                    index,
+                    f"duplicate {primary_key} '{value}' "
+                    f"(first seen on row {seen[value] + 2})",
                 )
             else:
-                seen[value] = row_number
+                seen[value] = index
 
     for tab_name, key_fields in COMPOSITE_PRIMARY_KEYS.items():
         seen: dict[tuple[str, ...], int] = {}
-        for row_number, row in enumerate(data.get(tab_name, []), start=2):
+        for index, row in enumerate(data.get(tab_name, [])):
             key = tuple(str(row.get(field, "")).strip() for field in key_fields)
             if not all(key):
                 continue
             if key in seen:
-                errors.append(
-                    f"{tab_name} row {row_number}: duplicate key {key} "
-                    f"(first seen on row {seen[key]})"
+                reject(
+                    tab_name,
+                    index,
+                    f"duplicate key {key} (first seen on row {seen[key] + 2})",
                 )
             else:
-                seen[key] = row_number
+                seen[key] = index
 
-    product_ids = {str(row.get("product_id", "")).strip() for row in data.get("products", [])}
-    vendor_ids = {str(row.get("vendor_id", "")).strip() for row in data.get("vendors", [])}
-    inventory_ids = {str(row.get("inventory_id", "")).strip() for row in data.get("inventory", [])}
-
-    for row_number, row in enumerate(data.get("inventory", []), start=2):
-        product_id = str(row.get("product_id", "")).strip()
-        vendor_id = str(row.get("vendor_id", "")).strip()
-        if product_id and product_id not in product_ids:
-            errors.append(f"inventory row {row_number}: unknown product_id '{product_id}'")
-        if vendor_id and vendor_id not in vendor_ids:
-            errors.append(f"inventory row {row_number}: unknown vendor_id '{vendor_id}'")
-
-    for row_number, row in enumerate(data.get("pricing", []), start=2):
-        inventory_id = str(row.get("inventory_id", "")).strip()
-        if inventory_id and inventory_id not in inventory_ids:
-            errors.append(f"pricing row {row_number}: unknown inventory_id '{inventory_id}'")
+    for index, row in enumerate(data.get("pricing", [])):
+        row_number = index + 2
+        min_qty = None
         if row.get("min_qty") not in (None, ""):
             try:
                 min_qty = _number(row.get("min_qty"), field="min_qty", row_number=row_number)
                 if min_qty < 1:
-                    errors.append(f"pricing row {row_number}: min_qty must be at least 1")
+                    reject("pricing", index, "min_qty must be at least 1")
             except ValueError as exc:
-                errors.append(str(exc))
-                min_qty = None
-        else:
-            min_qty = None
+                reject("pricing", index, str(exc).split(": ", 1)[-1])
         if row.get("unit_price") not in (None, ""):
             try:
                 if _number(row.get("unit_price"), field="unit_price", row_number=row_number) <= 0:
-                    errors.append(f"pricing row {row_number}: unit_price must be greater than 0")
+                    reject("pricing", index, "unit_price must be greater than 0")
             except ValueError as exc:
-                errors.append(str(exc))
+                reject("pricing", index, str(exc).split(": ", 1)[-1])
         if row.get("max_qty") not in (None, ""):
             try:
                 max_qty = _number(row.get("max_qty"), field="max_qty", row_number=row_number)
                 if min_qty is not None and max_qty < min_qty:
-                    errors.append(f"pricing row {row_number}: max_qty cannot be less than min_qty")
+                    reject("pricing", index, "max_qty cannot be less than min_qty")
             except ValueError as exc:
-                errors.append(str(exc))
+                reject("pricing", index, str(exc).split(": ", 1)[-1])
 
-    for row_number, row in enumerate(data.get("aliases", []), start=2):
-        product_id = str(row.get("product_id", "")).strip()
-        if product_id and product_id not in product_ids:
-            errors.append(f"aliases row {row_number}: unknown product_id '{product_id}'")
+    for index, row in enumerate(data.get("taxonomy_versions", [])):
+        status = str(row.get("status", "")).strip().casefold()
+        if status not in TAXONOMY_VERSION_STATUSES:
+            reject(
+                "taxonomy_versions",
+                index,
+                f"unsupported status '{row.get('status', '')}'",
+            )
 
-    version_ids = {
-        str(row.get("version_id", "")).strip()
-        for row in data.get("taxonomy_versions", [])
-        if str(row.get("version_id", "")).strip()
-    }
-    class_ids = {
-        str(row.get("class_id", "")).strip()
-        for row in data.get("product_classes", [])
-        if str(row.get("class_id", "")).strip()
-    }
-    family_ids = {
-        str(row.get("family_id", "")).strip()
-        for row in data.get("product_families", [])
-        if str(row.get("family_id", "")).strip()
-    }
-    specialty_codes = {
-        str(row.get("specialty_code", "")).strip()
-        for row in data.get("clinical_specialties", [])
-        if str(row.get("specialty_code", "")).strip()
-    }
+    for tab_name in (
+        "product_classes",
+        "product_families",
+        "product_taxonomy_assignments",
+        "product_specialties",
+        "product_attributes",
+    ):
+        for index, row in enumerate(data.get(tab_name, [])):
+            status = str(row.get("approval_status", "")).strip().casefold()
+            if status not in APPROVAL_STATUSES:
+                reject(
+                    tab_name,
+                    index,
+                    f"unsupported approval_status '{row.get('approval_status', '')}'",
+                )
+
+    original_product_ids = ids("products", "product_id", valid_only=False)
+    original_vendor_ids = ids("vendors", "vendor_id", valid_only=False)
+    valid_product_ids = ids("products", "product_id", valid_only=True)
+    valid_vendor_ids = ids("vendors", "vendor_id", valid_only=True)
+    reject_fk("inventory", "product_id", original_product_ids, valid_product_ids)
+    reject_fk("inventory", "vendor_id", original_vendor_ids, valid_vendor_ids)
+
+    original_inventory_ids = ids("inventory", "inventory_id", valid_only=False)
+    valid_inventory_ids = ids("inventory", "inventory_id", valid_only=True)
+    reject_fk("pricing", "inventory_id", original_inventory_ids, valid_inventory_ids)
+    reject_fk("aliases", "product_id", original_product_ids, valid_product_ids)
+
     taxonomy_child_tabs = (
         "product_classes",
         "product_families",
@@ -279,122 +338,96 @@ def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> None:
         "product_specialties",
         "product_attributes",
     )
-    if not version_ids and any(data.get(tab_name) for tab_name in taxonomy_child_tabs):
-        errors.append(
-            "taxonomy_versions: add a version row before importing taxonomy tables"
+    original_version_ids = ids("taxonomy_versions", "version_id", valid_only=False)
+    if not original_version_ids and any(data.get(tab_name) for tab_name in taxonomy_child_tabs):
+        reason = "taxonomy_versions: add a version row before importing taxonomy tables"
+        for tab_name in taxonomy_child_tabs:
+            for index, _ in surviving(tab_name):
+                reject(tab_name, index, reason)
+
+    original_class_ids = ids("product_classes", "class_id", valid_only=False)
+    while True:
+        reason_count = sum(len(values) for values in reasons.values())
+        valid_class_ids = ids("product_classes", "class_id", valid_only=True)
+        reject_fk(
+            "product_classes", "parent_class_id", original_class_ids, valid_class_ids
         )
+        if sum(len(values) for values in reasons.values()) == reason_count:
+            break
 
-    for row_number, row in enumerate(data.get("taxonomy_versions", []), start=2):
-        status = str(row.get("status", "")).strip().casefold()
-        if status not in TAXONOMY_VERSION_STATUSES:
-            errors.append(
-                f"taxonomy_versions row {row_number}: unsupported status '{row.get('status', '')}'"
-            )
+    valid_class_ids = ids("product_classes", "class_id", valid_only=True)
+    reject_fk("product_families", "class_id", original_class_ids, valid_class_ids)
 
-    approval_tabs = (
-        "product_classes",
-        "product_families",
+    original_family_ids = ids("product_families", "family_id", valid_only=False)
+    valid_family_ids = ids("product_families", "family_id", valid_only=True)
+    original_specialty_codes = ids(
+        "clinical_specialties", "specialty_code", valid_only=False
+    )
+    valid_specialty_codes = ids(
+        "clinical_specialties", "specialty_code", valid_only=True
+    )
+    valid_version_ids = ids("taxonomy_versions", "version_id", valid_only=True)
+
+    for tab_name in (
+        "taxonomy_version_families",
         "product_taxonomy_assignments",
         "product_specialties",
         "product_attributes",
+    ):
+        reject_fk(tab_name, "version_id", original_version_ids, valid_version_ids)
+
+    reject_fk(
+        "taxonomy_version_families",
+        "family_id",
+        original_family_ids,
+        valid_family_ids,
     )
-    for tab_name in approval_tabs:
-        for row_number, row in enumerate(data.get(tab_name, []), start=2):
-            status = str(row.get("approval_status", "")).strip().casefold()
-            if status not in APPROVAL_STATUSES:
-                errors.append(
-                    f"{tab_name} row {row_number}: unsupported approval_status "
-                    f"'{row.get('approval_status', '')}'"
-                )
+    reject_fk(
+        "product_taxonomy_assignments",
+        "product_id",
+        original_product_ids,
+        valid_product_ids,
+    )
+    reject_fk(
+        "product_taxonomy_assignments",
+        "family_id",
+        original_family_ids,
+        valid_family_ids,
+    )
+    reject_fk(
+        "product_specialties", "product_id", original_product_ids, valid_product_ids
+    )
+    reject_fk(
+        "product_specialties",
+        "specialty_code",
+        original_specialty_codes,
+        valid_specialty_codes,
+    )
+    reject_fk(
+        "product_attributes", "product_id", original_product_ids, valid_product_ids
+    )
 
-    for row_number, row in enumerate(data.get("product_classes", []), start=2):
-        parent_class_id = str(row.get("parent_class_id", "")).strip()
-        if parent_class_id and parent_class_id not in class_ids:
-            errors.append(
-                f"product_classes row {row_number}: unknown parent_class_id '{parent_class_id}'"
-            )
-
-    for row_number, row in enumerate(data.get("product_families", []), start=2):
-        class_id = str(row.get("class_id", "")).strip()
-        if class_id and class_id not in class_ids:
-            errors.append(f"product_families row {row_number}: unknown class_id '{class_id}'")
-
-    for row_number, row in enumerate(data.get("taxonomy_version_families", []), start=2):
-        version_id = str(row.get("version_id", "")).strip()
-        family_id = str(row.get("family_id", "")).strip()
-        if version_id and version_id not in version_ids:
-            errors.append(
-                f"taxonomy_version_families row {row_number}: unknown version_id '{version_id}'"
-            )
-        if family_id and family_id not in family_ids:
-            errors.append(
-                f"taxonomy_version_families row {row_number}: unknown family_id '{family_id}'"
-            )
-
-    for row_number, row in enumerate(data.get("product_taxonomy_assignments", []), start=2):
-        version_id = str(row.get("version_id", "")).strip()
-        product_id = str(row.get("product_id", "")).strip()
-        family_id = str(row.get("family_id", "")).strip()
-        if version_id and version_id not in version_ids:
-            errors.append(
-                f"product_taxonomy_assignments row {row_number}: unknown version_id '{version_id}'"
-            )
-        if product_id and product_id not in product_ids:
-            errors.append(
-                f"product_taxonomy_assignments row {row_number}: unknown product_id '{product_id}'"
-            )
-        if family_id and family_id not in family_ids:
-            errors.append(
-                f"product_taxonomy_assignments row {row_number}: unknown family_id '{family_id}'"
-            )
-
-    for row_number, row in enumerate(data.get("product_specialties", []), start=2):
-        version_id = str(row.get("version_id", "")).strip()
-        product_id = str(row.get("product_id", "")).strip()
-        specialty_code = str(row.get("specialty_code", "")).strip()
-        if version_id and version_id not in version_ids:
-            errors.append(
-                f"product_specialties row {row_number}: unknown version_id '{version_id}'"
-            )
-        if product_id and product_id not in product_ids:
-            errors.append(
-                f"product_specialties row {row_number}: unknown product_id '{product_id}'"
-            )
-        if specialty_code and specialty_code not in specialty_codes:
-            errors.append(
-                f"product_specialties row {row_number}: unknown specialty_code '{specialty_code}'"
-            )
-
-    for row_number, row in enumerate(data.get("product_attributes", []), start=2):
-        version_id = str(row.get("version_id", "")).strip()
-        product_id = str(row.get("product_id", "")).strip()
-        if version_id and version_id not in version_ids:
-            errors.append(
-                f"product_attributes row {row_number}: unknown version_id '{version_id}'"
-            )
-        if product_id and product_id not in product_ids:
-            errors.append(
-                f"product_attributes row {row_number}: unknown product_id '{product_id}'"
-            )
-
-    active_versions = [
-        str(row.get("version_id", "")).strip()
-        for row in data.get("taxonomy_versions", [])
+    active_rows = [
+        (index, row)
+        for index, row in surviving("taxonomy_versions")
         if str(row.get("status", "")).strip().casefold() == "active"
     ]
-    if len(active_versions) > 1:
-        errors.append("taxonomy_versions: only one version can be active")
+    for index, _ in active_rows[1:]:
+        reject("taxonomy_versions", index, "only one version can be active")
 
-    for version_id in active_versions:
+    for version_index, version_row in active_rows[:1]:
+        if ("taxonomy_versions", version_index) in reasons:
+            continue
+        version_id = str(version_row.get("version_id", "")).strip()
+        version_errors: list[str] = []
         assignment_rows = [
             row
-            for row in data.get("product_taxonomy_assignments", [])
+            for _, row in surviving("product_taxonomy_assignments")
             if str(row.get("version_id", "")).strip() == version_id
         ]
-        if len(assignment_rows) != len(product_ids):
-            errors.append(
-                f"taxonomy version '{version_id}': assigns {len(assignment_rows)} "
-                f"of {len(product_ids)} products"
+        if len(assignment_rows) != len(original_product_ids):
+            version_errors.append(
+                f"assigns {len(assignment_rows)} of {len(original_product_ids)} products"
             )
         for tab_name in (
             "product_taxonomy_assignments",
@@ -403,19 +436,19 @@ def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> None:
         ):
             pending_count = sum(
                 1
-                for row in data.get(tab_name, [])
+                for _, row in surviving(tab_name)
                 if str(row.get("version_id", "")).strip() == version_id
-                and str(row.get("approval_status", "")).strip().casefold() != "approved"
+                and str(row.get("approval_status", "")).strip().casefold()
+                != "approved"
             )
             if pending_count:
-                errors.append(
-                    f"taxonomy version '{version_id}': {pending_count} rows in "
-                    f"{tab_name} are not approved"
+                version_errors.append(
+                    f"{pending_count} rows in {tab_name} are not approved"
                 )
 
         version_family_ids = {
             str(row.get("family_id", "")).strip()
-            for row in data.get("taxonomy_version_families", [])
+            for _, row in surviving("taxonomy_version_families")
             if str(row.get("version_id", "")).strip() == version_id
         }
         assigned_family_ids = {
@@ -423,79 +456,133 @@ def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> None:
         }
         missing_version_families = assigned_family_ids - version_family_ids
         if missing_version_families:
-            errors.append(
-                f"taxonomy version '{version_id}': {len(missing_version_families)} "
-                "assigned families are missing from the version dictionary"
+            version_errors.append(
+                f"{len(missing_version_families)} assigned families are missing "
+                "from the version dictionary"
             )
         unapproved_family_count = sum(
             1
-            for row in data.get("product_families", [])
+            for _, row in surviving("product_families")
             if str(row.get("family_id", "")).strip() in version_family_ids
-            and str(row.get("approval_status", "")).strip().casefold() != "approved"
+            and str(row.get("approval_status", "")).strip().casefold()
+            != "approved"
         )
         if unapproved_family_count:
-            errors.append(
-                f"taxonomy version '{version_id}': {unapproved_family_count} "
-                "product families are not approved"
+            version_errors.append(
+                f"{unapproved_family_count} product families are not approved"
             )
         version_class_ids = {
             str(row.get("class_id", "")).strip()
-            for row in data.get("product_families", [])
+            for _, row in surviving("product_families")
             if str(row.get("family_id", "")).strip() in version_family_ids
         }
         unapproved_class_count = sum(
             1
-            for row in data.get("product_classes", [])
+            for _, row in surviving("product_classes")
             if str(row.get("class_id", "")).strip() in version_class_ids
-            and str(row.get("approval_status", "")).strip().casefold() != "approved"
+            and str(row.get("approval_status", "")).strip().casefold()
+            != "approved"
         )
         if unapproved_class_count:
-            errors.append(
-                f"taxonomy version '{version_id}': {unapproved_class_count} "
-                "product classes are not approved"
+            version_errors.append(
+                f"{unapproved_class_count} product classes are not approved"
             )
 
         primary_counts: dict[str, int] = {}
-        for row in data.get("product_specialties", []):
+        mapped_specialty_codes: set[str] = set()
+        for _, row in surviving("product_specialties"):
             if str(row.get("version_id", "")).strip() != version_id:
                 continue
-            if str(row.get("is_primary", "")).strip().casefold() not in {
+            mapped_specialty_codes.add(str(row.get("specialty_code", "")).strip())
+            if str(row.get("is_primary", "")).strip().casefold() in {
                 "true",
                 "yes",
                 "1",
                 "y",
             }:
-                continue
-            product_id = str(row.get("product_id", "")).strip()
-            primary_counts[product_id] = primary_counts.get(product_id, 0) + 1
+                product_id = str(row.get("product_id", "")).strip()
+                primary_counts[product_id] = primary_counts.get(product_id, 0) + 1
         duplicate_primaries = sum(1 for count in primary_counts.values() if count > 1)
         if duplicate_primaries:
-            errors.append(
-                f"taxonomy version '{version_id}': {duplicate_primaries} products "
-                "have more than one primary specialty"
+            version_errors.append(
+                f"{duplicate_primaries} products have more than one primary specialty"
             )
-        mapped_specialty_codes = {
-            str(row.get("specialty_code", "")).strip()
-            for row in data.get("product_specialties", [])
-            if str(row.get("version_id", "")).strip() == version_id
-        }
         inactive_specialty_count = sum(
             1
-            for row in data.get("clinical_specialties", [])
+            for _, row in surviving("clinical_specialties")
             if str(row.get("specialty_code", "")).strip() in mapped_specialty_codes
             and str(row.get("active", "true")).strip().casefold()
             in {"false", "no", "0", "n"}
         )
         if inactive_specialty_count:
-            errors.append(
-                f"taxonomy version '{version_id}': {inactive_specialty_count} "
-                "mapped clinical specialties are inactive"
+            version_errors.append(
+                f"{inactive_specialty_count} mapped clinical specialties are inactive"
+            )
+        if version_errors:
+            reject(
+                "taxonomy_versions",
+                version_index,
+                f"taxonomy version '{version_id}': " + "; ".join(version_errors),
             )
 
-    if errors:
-        preview = "\n- ".join(errors[:25])
-        suffix = f"\n- ... and {len(errors) - 25} more" if len(errors) > 25 else ""
-        raise ValueError(f"Catalog snapshot validation failed:\n- {preview}{suffix}")
+    valid_version_ids = ids("taxonomy_versions", "version_id", valid_only=True)
+    for tab_name in (
+        "taxonomy_version_families",
+        "product_taxonomy_assignments",
+        "product_specialties",
+        "product_attributes",
+    ):
+        reject_fk(tab_name, "version_id", original_version_ids, valid_version_ids)
+
+    if not valid_version_ids:
+        for tab_name in taxonomy_child_tabs:
+            for index, _ in surviving(tab_name):
+                reject(tab_name, index, "no taxonomy version passed validation")
+
+    def entity_id(tab_name: str, row: Dict, row_number: int) -> str:
+        if tab_name == "aliases":
+            product_id = str(row.get("product_id", "")).strip()
+            alias = str(row.get("alias", "")).strip()
+            return f"{product_id}:{alias}" if product_id or alias else f"row:{row_number}"
+        if tab_name in PRIMARY_KEYS:
+            value = str(row.get(PRIMARY_KEYS[tab_name], "")).strip()
+            return value or f"row:{row_number}"
+        if tab_name in COMPOSITE_PRIMARY_KEYS:
+            values = [
+                str(row.get(field, "")).strip()
+                for field in COMPOSITE_PRIMARY_KEYS[tab_name]
+            ]
+            return ":".join(values) if any(values) else f"row:{row_number}"
+        return f"row:{row_number}"
+
+    filtered = {
+        tab_name: [
+            row
+            for index, row in enumerate(rows)
+            if (tab_name, index) not in reasons
+        ]
+        for tab_name, rows in data.items()
+    }
+    skipped = list(tab_issues)
+    for tab_name, rows in data.items():
+        for index, row in enumerate(rows):
+            row_reasons = reasons.get((tab_name, index))
+            if not row_reasons:
+                continue
+            row_number = index + 2
+            skipped.append(
+                CatalogValidationIssue(
+                    tab_name=tab_name,
+                    row_number=row_number,
+                    entity_id=entity_id(tab_name, row, row_number),
+                    reason=(
+                        f"{tab_name} row {row_number}: "
+                        + "; ".join(row_reasons)
+                    ),
+                    row=dict(row),
+                )
+            )
+    return CatalogValidationResult(data=filtered, skipped=skipped)
 
 
 def validate_required_columns(tab_name: str, rows: List[Dict]) -> None:

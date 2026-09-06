@@ -70,6 +70,53 @@ class Alias(Base):
     product_id = Column(String, ForeignKey("products.product_id"))
 
 
+class SyncVersion(Base):
+    __tablename__ = "sync_versions"
+
+    version_id = Column(Integer, primary_key=True, autoincrement=True)
+    started_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
+    completed_at = Column(DateTime)
+    status = Column(String, nullable=True)
+    summary = Column(JSON, nullable=False, default=dict)
+
+    __table_args__ = (Index("ix_sync_versions_started_at", "started_at"),)
+
+
+class CatalogChangeLog(Base):
+    __tablename__ = "catalog_change_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    version_id = Column(
+        Integer,
+        ForeignKey("sync_versions.version_id"),
+        nullable=False,
+    )
+    entity_type = Column(String, nullable=False)
+    entity_id = Column(String, nullable=False)
+    change_type = Column(String, nullable=False)
+    before_state = Column(JSON)
+    after_state = Column(JSON)
+    reason = Column(String)
+    changed_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_catalog_change_log_version_id", "version_id"),
+        Index(
+            "ix_catalog_change_log_entity_id_changed_at",
+            "entity_id",
+            "changed_at",
+        ),
+    )
+
+
 class TaxonomyVersion(Base):
     __tablename__ = "taxonomy_versions"
 
