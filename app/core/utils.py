@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 redis_client = redis.Redis.from_url(build_redis_url(), decode_responses=True)
 SEEN_MARKER_TTL_SECONDS = 60 * 60 * 24 * 30
 BRAND_WORDMARK = "SocioMED"
-BRAND_SIGNATURE = f"— {BRAND_WORDMARK}"
+BRAND_SIGNATURE = BRAND_WORDMARK
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ Every outbound WhatsApp message passes through one sender. If the exact wordmark
 
 ```text
 
-— SocioMED
+SocioMED
 ```
 
 Messages already containing `SocioMED` are not given a duplicate footer. This applies to buyer replies, supplier RFQs, sales leads, daily digests, and failure messages. It is a visual provenance cue, not cryptographic proof; provider message IDs and audit records remain the authoritative authenticity check.
@@ -596,7 +596,7 @@ Your order (RFQ #{rfq_id}) for {product_name} has been fulfilled. Thank you for 
 
 ## Operational messages to suppliers and sales
 
-These messages are generated from database fields rather than the copy JSON, and they receive the same `— SocioMED` footer.
+These messages are generated from database fields rather than the copy JSON, and they receive the same `SocioMED` footer.
 
 ### New supplier or sales RFQ
 
@@ -611,7 +611,7 @@ Delivery: {delivery_location}
 Preferred supplier: {vendor_name}        [only when present]
 Notes: {notes}                           [only when present]
 
-— SocioMED
+SocioMED
 ```
 
 ### New sales lead
@@ -624,7 +624,7 @@ Organization: {organization}
 Phone: {phone}
 Need: {use_case}                         [only when present]
 
-— SocioMED
+SocioMED
 ```
 
 ### Daily RFQ digest

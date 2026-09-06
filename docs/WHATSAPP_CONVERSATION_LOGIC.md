@@ -122,7 +122,7 @@ An offer is shown only when all three links resolve: product → inventory → v
 
 The JSON file is the complete source of buyer-facing static copy. Keys are grouped here for safe editing:
 
-Every outbound WhatsApp message is passed through `brand_whatsapp_message`. If the exact wordmark `SocioMED` is absent, the sender appends a blank line and `— SocioMED`. Messages that already contain the exact wordmark are not given a duplicate signature.
+Every outbound WhatsApp message is passed through `brand_whatsapp_message`. If the exact wordmark `SocioMED` is absent, the sender appends a blank line and `SocioMED`. Messages that already contain the exact wordmark are not given a duplicate signature.
 
 | Area | Copy keys |
 |---|---|

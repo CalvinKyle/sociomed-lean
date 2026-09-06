@@ -282,7 +282,7 @@ def test_twilio_outbound_message_uses_configured_credentials(monkeypatch):
     assert result.provider_message_id == "SMOUTBOUND"
     assert captured["credentials"] == ("AC123", "auth-token")
     assert captured["payload"] == {
-        "body": "Welcome\n\n— SocioMED",
+        "body": "Welcome\n\nSocioMED",
         "from_": "whatsapp:+14155238886",
         "to": "whatsapp:+256700111111",
         "status_callback": "https://sociomed-beta.onrender.com/api/webhook/twilio/status",
@@ -291,6 +291,6 @@ def test_twilio_outbound_message_uses_configured_credentials(monkeypatch):
 
 def test_brand_wordmark_is_appended_once_to_every_outbound_message():
     assert utils.brand_whatsapp_message("Please reply with a quantity.") == (
-        "Please reply with a quantity.\n\n— SocioMED"
+        "Please reply with a quantity.\n\nSocioMED"
     )
     assert utils.brand_whatsapp_message("Welcome to SocioMED.") == "Welcome to SocioMED."
