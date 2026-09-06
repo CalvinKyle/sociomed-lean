@@ -138,6 +138,7 @@ async def twilio_readiness_check():
         checks["database"] = True
         db.execute(text("SELECT product_family_id FROM products LIMIT 0"))
         db.execute(text("SELECT phone FROM buyer_profiles LIMIT 0"))
+        db.execute(text("SELECT version_id FROM taxonomy_versions LIMIT 0"))
         checks["database_schema"] = True
     except Exception as exc:
         log_audit_event("system", "twilio_readiness_database_failed", {"error": str(exc)})
@@ -173,6 +174,7 @@ async def health_check():
         checks["db"] = True
         db.execute(text("SELECT product_family_id FROM products LIMIT 0"))
         db.execute(text("SELECT phone FROM buyer_profiles LIMIT 0"))
+        db.execute(text("SELECT version_id FROM taxonomy_versions LIMIT 0"))
         checks["database_schema"] = True
     except Exception as exc:
         log_audit_event("system", "health_db_failed", {"error": str(exc)})

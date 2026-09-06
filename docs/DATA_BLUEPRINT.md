@@ -24,6 +24,16 @@ The repo already uses the "Clean 5" marketplace structure:
 
 That part of the blueprint is not a new direction. It is the right direction, and the code now leans into it more explicitly.
 
+The approved taxonomy extends the Clean 5 without replacing it:
+
+- `product_classes` and `product_families` define one primary buyer-facing hierarchy.
+- `clinical_specialties` and `product_specialties` provide many-to-many clinical placement.
+- `product_attributes` stores variant facts such as size, gauge, lumen, material, and length.
+- `taxonomy_versions`, `taxonomy_version_families`, and `product_taxonomy_assignments` preserve review history and rollback.
+- `product_families.emdn_code` and `product_families.gmdn_code` hold optional external nomenclature references.
+
+Only a completely approved version can become active. Until then, runtime search continues using the legacy product fields.
+
 ## What We Implemented Now
 
 These clarifications are now reflected directly in the repo:
@@ -50,6 +60,19 @@ Use these exact tabs and lowercase headers in Google Sheets:
 | `inventory` | `inventory_id`, `product_id`, `vendor_id`, `brand`, `uom`, `stock_qty`, `lead_time_days` |
 | `pricing` | `pricing_id`, `inventory_id`, `min_qty`, `max_qty`, `unit_price` |
 | `aliases` | `alias`, `product_id` |
+
+The sync also recognizes these optional normalized taxonomy tabs after the family-first review is complete:
+
+| Tab | Required columns |
+| --- | --- |
+| `taxonomy_versions` | `version_id`, `name`, `status` |
+| `product_classes` | `class_id`, `name`, `approval_status` |
+| `product_families` | `family_id`, `name`, `class_id`, `approval_status`; optional `emdn_code`, `gmdn_code` |
+| `taxonomy_version_families` | `version_id`, `family_id` |
+| `product_taxonomy_assignments` | `version_id`, `product_id`, `family_id`, `approval_status` |
+| `clinical_specialties` | `specialty_code`, `name`; optional `active` |
+| `product_specialties` | `version_id`, `product_id`, `specialty_code`, `is_primary`, `approval_status` |
+| `product_attributes` | `version_id`, `product_id`, `attribute_code`, `value`, `approval_status`; optional `unit` |
 
 ## Operational Rules That Matter Before Launch
 
@@ -98,7 +121,7 @@ Use aliases for:
 - Misspellings
 - Brand names only when you intentionally want that brand term to return the mapped product
 
-Brand search is intentionally not automatic from `inventory.brand` yet. If `Zelus` should return gloves and oxygen masks, add `Zelus` as an alias for those product IDs. This keeps brand discovery deliberate instead of letting one broad brand query return unrelated inventory.
+Inventory brand and SKU are searchable automatically. Add an alias when a regional name, abbreviation, misspelling, or intentional business term should map to a specific product.
 
 ## Search Index Rules
 
@@ -108,7 +131,11 @@ Catalog search now uses a weighted index:
 | --- | --- |
 | `aliases.alias` | Highest |
 | `products.name` | Highest |
+| `products.product_family_name` | High |
 | `products.clinical_speciality` | Medium-high |
+| Active `product_attributes` | Medium-high |
+| `products.product_family_id` | Medium |
+| `inventory.brand` | Medium |
 | `products.category` | Medium |
 | `inventory.sku` | Medium |
 

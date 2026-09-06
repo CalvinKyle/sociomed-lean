@@ -8,6 +8,31 @@ REQUIRED_SHEET_COLUMNS = {
     "inventory": {"inventory_id", "product_id", "vendor_id", "brand", "uom", "stock_qty", "lead_time_days"},
     "pricing": {"pricing_id", "inventory_id", "min_qty", "max_qty", "unit_price"},
     "aliases": {"alias", "product_id"},
+    "taxonomy_versions": {"version_id", "name", "status"},
+    "product_classes": {"class_id", "name", "approval_status"},
+    "product_families": {"family_id", "name", "class_id", "approval_status"},
+    "taxonomy_version_families": {"version_id", "family_id"},
+    "product_taxonomy_assignments": {
+        "version_id",
+        "product_id",
+        "family_id",
+        "approval_status",
+    },
+    "clinical_specialties": {"specialty_code", "name"},
+    "product_specialties": {
+        "version_id",
+        "product_id",
+        "specialty_code",
+        "is_primary",
+        "approval_status",
+    },
+    "product_attributes": {
+        "version_id",
+        "product_id",
+        "attribute_code",
+        "value",
+        "approval_status",
+    },
 }
 
 REQUIRED_ROW_VALUES = {
@@ -16,13 +41,52 @@ REQUIRED_ROW_VALUES = {
     "inventory": ("inventory_id", "product_id", "vendor_id"),
     "pricing": ("pricing_id", "inventory_id", "min_qty", "unit_price"),
     "aliases": ("alias", "product_id"),
+    "taxonomy_versions": ("version_id", "name", "status"),
+    "product_classes": ("class_id", "name", "approval_status"),
+    "product_families": ("family_id", "name", "class_id", "approval_status"),
+    "taxonomy_version_families": ("version_id", "family_id"),
+    "product_taxonomy_assignments": (
+        "version_id",
+        "product_id",
+        "family_id",
+        "approval_status",
+    ),
+    "clinical_specialties": ("specialty_code", "name"),
+    "product_specialties": (
+        "version_id",
+        "product_id",
+        "specialty_code",
+        "is_primary",
+        "approval_status",
+    ),
+    "product_attributes": (
+        "version_id",
+        "product_id",
+        "attribute_code",
+        "value",
+        "approval_status",
+    ),
 }
 PRIMARY_KEYS = {
     "products": "product_id",
     "vendors": "vendor_id",
     "inventory": "inventory_id",
     "pricing": "pricing_id",
+    "taxonomy_versions": "version_id",
+    "product_classes": "class_id",
+    "product_families": "family_id",
+    "clinical_specialties": "specialty_code",
 }
+
+COMPOSITE_PRIMARY_KEYS = {
+    "taxonomy_version_families": ("version_id", "family_id"),
+    "product_taxonomy_assignments": ("version_id", "product_id"),
+    "product_specialties": ("version_id", "product_id", "specialty_code"),
+    "product_attributes": ("version_id", "product_id", "attribute_code"),
+}
+
+APPROVAL_STATUSES = {"pending", "approved", "revise", "rejected"}
+TAXONOMY_VERSION_STATUSES = {"draft", "approved", "active", "retired"}
 
 KNOWN_E164_PREFIXES = ("211", "243", "250", "254", "255", "256", "257", "258")
 MULTI_VALUE_SEPARATOR_PATTERN = r"\s*(?:\||;|,)\s*"
@@ -127,6 +191,20 @@ def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> None:
             else:
                 seen[value] = row_number
 
+    for tab_name, key_fields in COMPOSITE_PRIMARY_KEYS.items():
+        seen: dict[tuple[str, ...], int] = {}
+        for row_number, row in enumerate(data.get(tab_name, []), start=2):
+            key = tuple(str(row.get(field, "")).strip() for field in key_fields)
+            if not all(key):
+                continue
+            if key in seen:
+                errors.append(
+                    f"{tab_name} row {row_number}: duplicate key {key} "
+                    f"(first seen on row {seen[key]})"
+                )
+            else:
+                seen[key] = row_number
+
     product_ids = {str(row.get("product_id", "")).strip() for row in data.get("products", [])}
     vendor_ids = {str(row.get("vendor_id", "")).strip() for row in data.get("vendors", [])}
     inventory_ids = {str(row.get("inventory_id", "")).strip() for row in data.get("inventory", [])}
@@ -171,6 +249,248 @@ def validate_catalog_snapshot(data: Dict[str, List[Dict]]) -> None:
         product_id = str(row.get("product_id", "")).strip()
         if product_id and product_id not in product_ids:
             errors.append(f"aliases row {row_number}: unknown product_id '{product_id}'")
+
+    version_ids = {
+        str(row.get("version_id", "")).strip()
+        for row in data.get("taxonomy_versions", [])
+        if str(row.get("version_id", "")).strip()
+    }
+    class_ids = {
+        str(row.get("class_id", "")).strip()
+        for row in data.get("product_classes", [])
+        if str(row.get("class_id", "")).strip()
+    }
+    family_ids = {
+        str(row.get("family_id", "")).strip()
+        for row in data.get("product_families", [])
+        if str(row.get("family_id", "")).strip()
+    }
+    specialty_codes = {
+        str(row.get("specialty_code", "")).strip()
+        for row in data.get("clinical_specialties", [])
+        if str(row.get("specialty_code", "")).strip()
+    }
+    taxonomy_child_tabs = (
+        "product_classes",
+        "product_families",
+        "taxonomy_version_families",
+        "product_taxonomy_assignments",
+        "clinical_specialties",
+        "product_specialties",
+        "product_attributes",
+    )
+    if not version_ids and any(data.get(tab_name) for tab_name in taxonomy_child_tabs):
+        errors.append(
+            "taxonomy_versions: add a version row before importing taxonomy tables"
+        )
+
+    for row_number, row in enumerate(data.get("taxonomy_versions", []), start=2):
+        status = str(row.get("status", "")).strip().casefold()
+        if status not in TAXONOMY_VERSION_STATUSES:
+            errors.append(
+                f"taxonomy_versions row {row_number}: unsupported status '{row.get('status', '')}'"
+            )
+
+    approval_tabs = (
+        "product_classes",
+        "product_families",
+        "product_taxonomy_assignments",
+        "product_specialties",
+        "product_attributes",
+    )
+    for tab_name in approval_tabs:
+        for row_number, row in enumerate(data.get(tab_name, []), start=2):
+            status = str(row.get("approval_status", "")).strip().casefold()
+            if status not in APPROVAL_STATUSES:
+                errors.append(
+                    f"{tab_name} row {row_number}: unsupported approval_status "
+                    f"'{row.get('approval_status', '')}'"
+                )
+
+    for row_number, row in enumerate(data.get("product_classes", []), start=2):
+        parent_class_id = str(row.get("parent_class_id", "")).strip()
+        if parent_class_id and parent_class_id not in class_ids:
+            errors.append(
+                f"product_classes row {row_number}: unknown parent_class_id '{parent_class_id}'"
+            )
+
+    for row_number, row in enumerate(data.get("product_families", []), start=2):
+        class_id = str(row.get("class_id", "")).strip()
+        if class_id and class_id not in class_ids:
+            errors.append(f"product_families row {row_number}: unknown class_id '{class_id}'")
+
+    for row_number, row in enumerate(data.get("taxonomy_version_families", []), start=2):
+        version_id = str(row.get("version_id", "")).strip()
+        family_id = str(row.get("family_id", "")).strip()
+        if version_id and version_id not in version_ids:
+            errors.append(
+                f"taxonomy_version_families row {row_number}: unknown version_id '{version_id}'"
+            )
+        if family_id and family_id not in family_ids:
+            errors.append(
+                f"taxonomy_version_families row {row_number}: unknown family_id '{family_id}'"
+            )
+
+    for row_number, row in enumerate(data.get("product_taxonomy_assignments", []), start=2):
+        version_id = str(row.get("version_id", "")).strip()
+        product_id = str(row.get("product_id", "")).strip()
+        family_id = str(row.get("family_id", "")).strip()
+        if version_id and version_id not in version_ids:
+            errors.append(
+                f"product_taxonomy_assignments row {row_number}: unknown version_id '{version_id}'"
+            )
+        if product_id and product_id not in product_ids:
+            errors.append(
+                f"product_taxonomy_assignments row {row_number}: unknown product_id '{product_id}'"
+            )
+        if family_id and family_id not in family_ids:
+            errors.append(
+                f"product_taxonomy_assignments row {row_number}: unknown family_id '{family_id}'"
+            )
+
+    for row_number, row in enumerate(data.get("product_specialties", []), start=2):
+        version_id = str(row.get("version_id", "")).strip()
+        product_id = str(row.get("product_id", "")).strip()
+        specialty_code = str(row.get("specialty_code", "")).strip()
+        if version_id and version_id not in version_ids:
+            errors.append(
+                f"product_specialties row {row_number}: unknown version_id '{version_id}'"
+            )
+        if product_id and product_id not in product_ids:
+            errors.append(
+                f"product_specialties row {row_number}: unknown product_id '{product_id}'"
+            )
+        if specialty_code and specialty_code not in specialty_codes:
+            errors.append(
+                f"product_specialties row {row_number}: unknown specialty_code '{specialty_code}'"
+            )
+
+    for row_number, row in enumerate(data.get("product_attributes", []), start=2):
+        version_id = str(row.get("version_id", "")).strip()
+        product_id = str(row.get("product_id", "")).strip()
+        if version_id and version_id not in version_ids:
+            errors.append(
+                f"product_attributes row {row_number}: unknown version_id '{version_id}'"
+            )
+        if product_id and product_id not in product_ids:
+            errors.append(
+                f"product_attributes row {row_number}: unknown product_id '{product_id}'"
+            )
+
+    active_versions = [
+        str(row.get("version_id", "")).strip()
+        for row in data.get("taxonomy_versions", [])
+        if str(row.get("status", "")).strip().casefold() == "active"
+    ]
+    if len(active_versions) > 1:
+        errors.append("taxonomy_versions: only one version can be active")
+
+    for version_id in active_versions:
+        assignment_rows = [
+            row
+            for row in data.get("product_taxonomy_assignments", [])
+            if str(row.get("version_id", "")).strip() == version_id
+        ]
+        if len(assignment_rows) != len(product_ids):
+            errors.append(
+                f"taxonomy version '{version_id}': assigns {len(assignment_rows)} "
+                f"of {len(product_ids)} products"
+            )
+        for tab_name in (
+            "product_taxonomy_assignments",
+            "product_specialties",
+            "product_attributes",
+        ):
+            pending_count = sum(
+                1
+                for row in data.get(tab_name, [])
+                if str(row.get("version_id", "")).strip() == version_id
+                and str(row.get("approval_status", "")).strip().casefold() != "approved"
+            )
+            if pending_count:
+                errors.append(
+                    f"taxonomy version '{version_id}': {pending_count} rows in "
+                    f"{tab_name} are not approved"
+                )
+
+        version_family_ids = {
+            str(row.get("family_id", "")).strip()
+            for row in data.get("taxonomy_version_families", [])
+            if str(row.get("version_id", "")).strip() == version_id
+        }
+        assigned_family_ids = {
+            str(row.get("family_id", "")).strip() for row in assignment_rows
+        }
+        missing_version_families = assigned_family_ids - version_family_ids
+        if missing_version_families:
+            errors.append(
+                f"taxonomy version '{version_id}': {len(missing_version_families)} "
+                "assigned families are missing from the version dictionary"
+            )
+        unapproved_family_count = sum(
+            1
+            for row in data.get("product_families", [])
+            if str(row.get("family_id", "")).strip() in version_family_ids
+            and str(row.get("approval_status", "")).strip().casefold() != "approved"
+        )
+        if unapproved_family_count:
+            errors.append(
+                f"taxonomy version '{version_id}': {unapproved_family_count} "
+                "product families are not approved"
+            )
+        version_class_ids = {
+            str(row.get("class_id", "")).strip()
+            for row in data.get("product_families", [])
+            if str(row.get("family_id", "")).strip() in version_family_ids
+        }
+        unapproved_class_count = sum(
+            1
+            for row in data.get("product_classes", [])
+            if str(row.get("class_id", "")).strip() in version_class_ids
+            and str(row.get("approval_status", "")).strip().casefold() != "approved"
+        )
+        if unapproved_class_count:
+            errors.append(
+                f"taxonomy version '{version_id}': {unapproved_class_count} "
+                "product classes are not approved"
+            )
+
+        primary_counts: dict[str, int] = {}
+        for row in data.get("product_specialties", []):
+            if str(row.get("version_id", "")).strip() != version_id:
+                continue
+            if str(row.get("is_primary", "")).strip().casefold() not in {
+                "true",
+                "yes",
+                "1",
+                "y",
+            }:
+                continue
+            product_id = str(row.get("product_id", "")).strip()
+            primary_counts[product_id] = primary_counts.get(product_id, 0) + 1
+        duplicate_primaries = sum(1 for count in primary_counts.values() if count > 1)
+        if duplicate_primaries:
+            errors.append(
+                f"taxonomy version '{version_id}': {duplicate_primaries} products "
+                "have more than one primary specialty"
+            )
+        mapped_specialty_codes = {
+            str(row.get("specialty_code", "")).strip()
+            for row in data.get("product_specialties", [])
+            if str(row.get("version_id", "")).strip() == version_id
+        }
+        inactive_specialty_count = sum(
+            1
+            for row in data.get("clinical_specialties", [])
+            if str(row.get("specialty_code", "")).strip() in mapped_specialty_codes
+            and str(row.get("active", "true")).strip().casefold()
+            in {"false", "no", "0", "n"}
+        )
+        if inactive_specialty_count:
+            errors.append(
+                f"taxonomy version '{version_id}': {inactive_specialty_count} "
+                "mapped clinical specialties are inactive"
+            )
 
     if errors:
         preview = "\n- ".join(errors[:25])

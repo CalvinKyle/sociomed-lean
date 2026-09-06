@@ -87,3 +87,38 @@ def test_generic_family_name_supports_catheters_and_prefers_a_live_variant():
 
     assert [match["product_id"] for match in matches] == ["cvc-live"]
     assert matches[0]["search_display_name"] == "Central venous catheters"
+
+
+def test_structured_variant_attributes_are_searchable():
+    products = [
+        {
+            "product_id": "foley-16",
+            "name": "Foley urinary catheter",
+            "product_family_id": "FAM-CATH-URINARY-FOLEY",
+            "product_family_name": "Foley urinary catheters",
+        }
+    ]
+    data = {
+        "products": products,
+        "aliases": [],
+        "inventory": [],
+        "pricing": [],
+        "product_attributes": [
+            {
+                "product_id": "foley-16",
+                "attribute_code": "size",
+                "value": "16",
+                "unit": "CH",
+            },
+            {
+                "product_id": "foley-16",
+                "attribute_code": "lumens",
+                "value": "2",
+                "unit": None,
+            },
+        ],
+    }
+
+    matches = find_products("size 16 CH", products, [], data=data)
+
+    assert [match["product_id"] for match in matches] == ["foley-16"]

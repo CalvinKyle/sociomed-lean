@@ -49,7 +49,12 @@ def _score_field(query: str, value: str, weight: float) -> float:
     return max(fuzz.WRatio(query, value_clean), fuzz.token_set_ratio(query, value_clean)) * weight
 
 
-def _build_search_documents(products: List[Dict], aliases: List[Dict], inventory: Optional[List[Dict]] = None) -> list[dict]:
+def _build_search_documents(
+    products: List[Dict],
+    aliases: List[Dict],
+    inventory: Optional[List[Dict]] = None,
+    attributes: Optional[List[Dict]] = None,
+) -> list[dict]:
     aliases_by_product = {}
     for alias in aliases:
         product_id = alias.get("product_id")
@@ -68,6 +73,23 @@ def _build_search_documents(products: List[Dict], aliases: List[Dict], inventory
         if product_id and brand:
             brands_by_product.setdefault(product_id, []).append(brand)
 
+    attributes_by_product = {}
+    for attribute in attributes or []:
+        product_id = attribute.get("product_id")
+        value = attribute.get("value")
+        if not product_id or value in (None, ""):
+            continue
+        searchable_value = " ".join(
+            str(part).strip()
+            for part in (
+                attribute.get("attribute_code"),
+                value,
+                attribute.get("unit"),
+            )
+            if part not in (None, "")
+        )
+        attributes_by_product.setdefault(product_id, []).append(searchable_value)
+
     documents = []
     for product in products:
         product_id = product.get("product_id")
@@ -81,6 +103,7 @@ def _build_search_documents(products: List[Dict], aliases: List[Dict], inventory
                     {"name": "category", "weight": 0.75, "values": [product.get("category", "")]},
                     {"name": "product_family_name", "weight": 1.1, "values": [product.get("product_family_name", "")]},
                     {"name": "product_family_id", "weight": 0.9, "values": [product.get("product_family_id", "")]},
+                    {"name": "product_attribute", "weight": 0.95, "values": attributes_by_product.get(product_id, [])},
                     {"name": "brand", "weight": 0.85, "values": brands_by_product.get(product_id, [])},
                     {"name": "sku", "weight": 0.8, "values": skus_by_product.get(product_id, [])},
                 ],
@@ -150,6 +173,7 @@ def find_products(
         products,
         aliases,
         (data or {}).get("inventory", []),
+        (data or {}).get("product_attributes", []),
     )
 
     best_by_family: dict[str, tuple[float, int, Dict]] = {}

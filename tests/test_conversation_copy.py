@@ -25,3 +25,16 @@ def test_human_readable_copy_review_lists_every_copy_key():
     review_doc = Path("docs/WHATSAPP_RESPONSE_COPY.md").read_text(encoding="utf-8")
 
     assert all(f"`{key}`" in review_doc for key in copy)
+
+
+def test_uploaded_business_wording_is_loaded_verbatim():
+    copy = load_conversation_copy()
+
+    assert copy["main_menu"].startswith("Welcome to SocioMED!")
+    assert "You may type a product immediately." in copy["main_menu"]
+    assert "we shall notify the sales team to follow up" in copy["help"]
+    assert "connect you directly with a salesperson" in copy["sales_prompt_short"]
+    assert "Need 500 pairs of gloves urgently" in copy["sales_prompt"]
+    assert copy["search_no_match"].endswith(
+        "Reply SEARCH to try another term, or SALES for help."
+    )

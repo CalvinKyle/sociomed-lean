@@ -64,10 +64,23 @@ Search now normalizes selected plurals, splits multi-value aliases, searches bra
 5. Keep `RUN_DB_MIGRATIONS=true` for the Render web startup. This handles Alembic on the free tier but does not import Google Sheet data; catalog sync remains a separate deliberate operation.
 6. Test `sutures`, one exact suture material/brand, one product without price, an RFQ, supplier routing, `END`, and a new message after `END` through the Twilio Sandbox.
 
-## Decisions still requiring product approval
+## Taxonomy architecture approved on 2026-09-06
 
-1. **Stale-row reconciliation:** current sync upserts products, inventory, and pricing but does not delete rows removed from Google Sheets. A snapshot reconciliation mode would prevent stale offers, but deletion policy and rollback rules must be approved first.
-2. **Suture family questionnaire:** the next search iteration should ask material, absorbability, size, needle, and pack configuration before showing SKU-level offers. Confirm the preferred clinical/business terminology before implementing it.
-3. **Expanded database schema:** importing subcategory, manufacturer, regulatory class, search tags, inventory status, currency, and validity dates would improve filtering and governance but requires an Alembic migration and clear data ownership.
-4. **Availability language:** choose whether blank stock means “source on request,” “availability to be confirmed,” or hides the offer. The code currently uses cautious sourcing language.
-5. **Automated sync ownership:** approve either a manual GitHub Actions sync button or a scheduled job. A manual action is recommended for beta because it gives you a review gate without requiring Render's paid pre-deploy feature.
+1. Every product has one primary product family and each family belongs to a broader product class.
+2. Clinical placement uses a many-to-many product-specialty table.
+3. Product families can store optional EMDN and GMDN cross-references.
+4. Size, gauge, lumen, material, length, and similar variant facts use structured product attributes.
+5. Review order is family dictionary, product exceptions, then specialty mappings.
+6. Production uses a versioned taxonomy and activates only a completely approved version.
+
+Migration `0007_catalog_taxonomy` implements the normalized tables. The Google Sheets adapter recognizes optional normalized taxonomy tabs, and snapshot validation blocks incomplete or unapproved active versions before database writes. Runtime catalog loading overlays family names, specialty mappings, and searchable attributes only from the active taxonomy version. The legacy product fields remain available while the first version is reviewed.
+
+## Remaining review and operating decisions
+
+1. **Family dictionary:** approve, rename, merge, or reject the proposed family rows before product assignments are approved.
+2. **Product exceptions:** resolve the flagged product rows after the dictionary is stable.
+3. **Specialty mappings:** obtain clinical review for the proposed many-to-many assignments and primary-specialty choices.
+4. **Stale-row reconciliation:** current sync upserts products, inventory, and pricing but does not delete rows removed from Google Sheets. Deletion policy and rollback rules still need approval.
+5. **Guided selection questions:** decide the preferred clinical and business terminology for family-specific questions such as material, size, gauge, lumen, and pack configuration.
+6. **Availability language:** choose whether blank stock means “source on request,” “availability to be confirmed,” or hides the offer. The code currently uses cautious sourcing language.
+7. **Automated sync ownership:** approve either a manual GitHub Actions sync button or a scheduled job. A manual action remains recommended for beta because it provides a review gate without Render's paid pre-deploy feature.

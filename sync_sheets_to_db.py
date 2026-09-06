@@ -31,7 +31,16 @@ from app.models.db import (
     Inventory,
     Pricing,
     Alias,
+    TaxonomyVersion,
+    ProductClass,
+    ProductFamily,
+    TaxonomyVersionFamily,
+    ProductTaxonomyAssignment,
+    ClinicalSpecialty,
+    ProductSpecialty,
+    ProductAttribute,
 )
+from app.services.taxonomy import activate_taxonomy_version
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -71,6 +80,11 @@ def _coerce_bool(value, default=False):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"true", "yes", "1", "y"}
+
+
+def _normalize_status(value, default: str) -> str:
+    normalized = str(value or default).strip().casefold()
+    return normalized or default
 
 
 def _upsert(db, model_cls, pk_field: str, rows: list[dict], field_map: dict) -> tuple[int, int]:
@@ -126,6 +140,152 @@ def _upsert_vendors(db, rows: list[dict]) -> tuple[int, int]:
             obj.is_own_inventory = _coerce_bool(raw_is_own)
     return inserted, updated
 
+
+def _sync_taxonomy(db, data: dict[str, list[dict]]) -> None:
+    """Upsert optional normalized taxonomy tabs and activate only approved snapshots."""
+    version_rows = data.get("taxonomy_versions", [])
+    if not version_rows:
+        return
+
+    requested_active_versions: list[str] = []
+    for row in version_rows:
+        version_id = str(row.get("version_id", "")).strip()
+        version = db.get(TaxonomyVersion, version_id)
+        if version is None:
+            version = TaxonomyVersion(version_id=version_id)
+            db.add(version)
+        version.name = str(row.get("name", "")).strip()
+        requested_status = _normalize_status(row.get("status"), "draft")
+        if requested_status == "active":
+            requested_active_versions.append(version_id)
+            version.status = "approved"
+        else:
+            version.status = requested_status
+        version.effective_date = _coerce_date(row.get("effective_date"))
+
+    # Insert class identifiers before assigning self-referencing parents.
+    for row in data.get("product_classes", []):
+        class_id = str(row.get("class_id", "")).strip()
+        product_class = db.get(ProductClass, class_id)
+        if product_class is None:
+            product_class = ProductClass(class_id=class_id)
+            db.add(product_class)
+        product_class.name = str(row.get("name", "")).strip()
+        product_class.approval_status = _normalize_status(
+            row.get("approval_status"), "pending"
+        )
+        product_class.parent_class_id = None
+    db.flush()
+    for row in data.get("product_classes", []):
+        class_id = str(row.get("class_id", "")).strip()
+        db.get(ProductClass, class_id).parent_class_id = (
+            str(row.get("parent_class_id", "")).strip() or None
+        )
+
+    for row in data.get("product_families", []):
+        family_id = str(row.get("family_id", "")).strip()
+        family = db.get(ProductFamily, family_id)
+        if family is None:
+            family = ProductFamily(family_id=family_id)
+            db.add(family)
+        family.name = str(row.get("name", "")).strip()
+        family.class_id = str(row.get("class_id", "")).strip()
+        family.emdn_code = str(row.get("emdn_code", "")).strip() or None
+        family.gmdn_code = str(row.get("gmdn_code", "")).strip() or None
+        family.approval_status = _normalize_status(
+            row.get("approval_status"), "pending"
+        )
+
+    for row in data.get("clinical_specialties", []):
+        specialty_code = str(row.get("specialty_code", "")).strip()
+        specialty = db.get(ClinicalSpecialty, specialty_code)
+        if specialty is None:
+            specialty = ClinicalSpecialty(specialty_code=specialty_code)
+            db.add(specialty)
+        specialty.name = str(row.get("name", "")).strip()
+        specialty.active = _coerce_bool(row.get("active"), default=True)
+
+    db.flush()
+
+    for row in data.get("taxonomy_version_families", []):
+        key = (
+            str(row.get("version_id", "")).strip(),
+            str(row.get("family_id", "")).strip(),
+        )
+        if db.get(TaxonomyVersionFamily, key) is None:
+            db.add(TaxonomyVersionFamily(version_id=key[0], family_id=key[1]))
+
+    for row in data.get("product_taxonomy_assignments", []):
+        key = (
+            str(row.get("version_id", "")).strip(),
+            str(row.get("product_id", "")).strip(),
+        )
+        assignment = db.get(ProductTaxonomyAssignment, key)
+        if assignment is None:
+            assignment = ProductTaxonomyAssignment(
+                version_id=key[0],
+                product_id=key[1],
+            )
+            db.add(assignment)
+        assignment.family_id = str(row.get("family_id", "")).strip()
+        assignment.approval_status = _normalize_status(
+            row.get("approval_status"), "pending"
+        )
+
+    for row in data.get("product_specialties", []):
+        key = (
+            str(row.get("version_id", "")).strip(),
+            str(row.get("product_id", "")).strip(),
+            str(row.get("specialty_code", "")).strip(),
+        )
+        mapping = db.get(ProductSpecialty, key)
+        if mapping is None:
+            mapping = ProductSpecialty(
+                version_id=key[0],
+                product_id=key[1],
+                specialty_code=key[2],
+            )
+            db.add(mapping)
+        mapping.is_primary = _coerce_bool(row.get("is_primary"), default=False)
+        mapping.approval_status = _normalize_status(
+            row.get("approval_status"), "pending"
+        )
+
+    for row in data.get("product_attributes", []):
+        key = (
+            str(row.get("version_id", "")).strip(),
+            str(row.get("product_id", "")).strip(),
+            str(row.get("attribute_code", "")).strip(),
+        )
+        attribute = db.get(ProductAttribute, key)
+        if attribute is None:
+            attribute = ProductAttribute(
+                version_id=key[0],
+                product_id=key[1],
+                attribute_code=key[2],
+            )
+            db.add(attribute)
+        attribute.value = str(row.get("value", "")).strip()
+        attribute.unit = str(row.get("unit", "")).strip() or None
+        attribute.approval_status = _normalize_status(
+            row.get("approval_status"), "pending"
+        )
+
+    db.flush()
+    for version_id in requested_active_versions:
+        activate_taxonomy_version(db, version_id)
+        logger.info("Taxonomy version activated: %s", version_id)
+
+    logger.info(
+        "Taxonomy: %d versions, %d classes, %d families, %d product assignments, "
+        "%d specialty mappings, %d attributes",
+        len(version_rows),
+        len(data.get("product_classes", [])),
+        len(data.get("product_families", [])),
+        len(data.get("product_taxonomy_assignments", [])),
+        len(data.get("product_specialties", [])),
+        len(data.get("product_attributes", [])),
+    )
 
 # ─── main ─────────────────────────────────────────────────────────────────────
 
@@ -252,6 +412,10 @@ def sync_sheets_to_db(dry_run: bool = False):
         db.bulk_save_objects(alias_rows)
         logger.info("Aliases: replaced with %d rows (%d stale removed)",
                     len(alias_rows), len(data["aliases"]) - len(alias_rows))
+
+        # Optional versioned taxonomy tabs are imported only when present.
+        # An active request is validated after all review rows are staged.
+        _sync_taxonomy(db, data)
 
         if dry_run:
             db.rollback()

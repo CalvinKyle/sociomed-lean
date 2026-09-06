@@ -22,9 +22,9 @@ Some delivered messages combine the templates below with live catalog values. Ca
 ### Main menu — `main_menu`
 
 ```text
-Welcome to SocioMED.
+Welcome to SocioMED!
 
-What medical supply do you need today? You can type a product immediately.
+What medical supply do you need today? You may type a product immediately.
 
 1. Search products
 2. Browse categories
@@ -41,7 +41,7 @@ Type END at any time to close this session.
 How SocioMED works:
 1. Search a product such as surgical gloves or oxygen mask.
 2. View featured offers when you want a quick shortlist.
-3. Request a quotation and we notify the supplier or sales team.
+3. Request a quotation and we shall notify the sales team to follow up.
 4. Talk to sales for urgent or complex sourcing needs.
 5. Browse by category when you want to scan product families first.
 
@@ -91,21 +91,21 @@ Sorry, I could not complete that request right now. Your message has not been ig
 ### Short sales prompt — `sales_prompt_short`
 
 ```text
-Reply with: name | organization | what you need. We will connect you with sales.
+Reply with: Name | Organization | What you need. We will connect you directly with a salesperson.
 ```
 
 ### Sales prompt with example — `sales_prompt`
 
 ```text
-Reply with: name | organization | what you need.
-Example: Amina | City Care Hospital | Need 500 gloves urgently
+Reply with: Name | Organization | What you need.
+Example: Amina | City Care Hospital | Need 500 pairs of gloves urgently
 ```
 
 ### Sales handoff prompt — `sales_handoff_prompt`
 
 ```text
 Reply with: name | organization | what you need.
-We will connect you with sales.
+We will connect you directly with a salesperson.
 ```
 
 ### Restricted medicine — `restricted_medicine`
@@ -271,7 +271,7 @@ Please enter a clear product search such as surgical gloves, IV set, or oxygen m
 ```text
 I could not find that exact product.
 
-Reply SEARCH to try another term, QUOTE and SocioMED can source it, or SALES for help.
+Reply SEARCH to try another term, or SALES for help.
 ```
 
 ### Product found without live offer from menu search — `search_no_live_offer_menu`
@@ -648,4 +648,3 @@ New requests:                            [when present]
 ## Complete flow reference
 
 The state-by-state routing, global commands, intent order, search behavior, and test checklist are documented in `docs/WHATSAPP_CONVERSATION_LOGIC.md`.
-

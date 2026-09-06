@@ -63,6 +63,7 @@ def build_indexes(data: dict) -> dict:
         data.get("products", []),
         data.get("aliases", []),
         data.get("inventory", []),
+        data.get("product_attributes", []),
     )
     _build_related_product_indexes(data)
 
