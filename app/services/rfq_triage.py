@@ -1,11 +1,13 @@
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
 
+from app.core.config import SMALL_RFQ_MAX_ITEMS
+from app.core.conversation_copy import conversation_message
 from app.services.search import find_products, get_results
 
 
-BULK_MATCH_THRESHOLD = 3
+BULK_MATCH_THRESHOLD = SMALL_RFQ_MAX_ITEMS
 MAX_PRODUCT_NAME_LENGTH = 160
 ITEM_QUANTITY_PATTERN = re.compile(r"^(.*?)\s*[xX]\s*(\d+)$")
 
@@ -111,8 +113,26 @@ def _bulk_notes(items: list[str], original_text: str) -> str:
     return f"Bulk RFQ items: {numbered_items}. Original request: {original_text.strip()}"
 
 
-def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
+def parse_direct_rfq_message(
+    text: str,
+    buyer_profile: Optional[Mapping[str, str]] = None,
+) -> Optional[DirectRFQPayload]:
     parts = _split_pipe_message(text)
+    if len(parts) == 2 and buyer_profile:
+        item_text, quantity_text = parts
+        try:
+            quantity = int(quantity_text)
+        except ValueError:
+            return None
+        return DirectRFQPayload(
+            buyer_name=buyer_profile.get("contact_name", ""),
+            product_name=_trim_product_name(item_text),
+            quantity=quantity,
+            organization=buyer_profile.get("organization", ""),
+            delivery_location=buyer_profile.get("delivery_location", ""),
+            source="whatsapp_returning_buyer_rfq",
+            notes="Buyer confirmed reuse of saved procurement profile",
+        )
     if len(parts) >= 5:
         buyer_name, item_text, quantity_text, facility, location = parts[:5]
         try:
@@ -163,13 +183,13 @@ def parse_direct_rfq_message(text: str) -> Optional[DirectRFQPayload]:
 
 
 def format_ambiguous_match_message(matches: list[Dict]) -> str:
-    product_list = "\n".join(f"{index}. {product['name']}" for index, product in enumerate(matches, start=1))
+    product_list = "\n".join(
+        f"{index}. {product.get('search_display_name') or product['name']}"
+        for index, product in enumerate(matches, start=1)
+    )
     if len(matches) > BULK_MATCH_THRESHOLD:
-        next_step = (
-            "Reply with the product number to price one item first.\n"
-            "Reply RFQ if this is a bulk request, or AGENT for a sourcing handoff."
-        )
+        next_step = conversation_message("ambiguous_next_large")
     else:
-        next_step = "Reply with the product number you want to price first, or RFQ for a manual quotation."
+        next_step = conversation_message("ambiguous_next_small")
 
-    return f"I found multiple possible matches:\n{product_list}\n\n{next_step}"
+    return f"{conversation_message('ambiguous_header')}\n{product_list}\n\n{next_step}"

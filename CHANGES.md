@@ -1,5 +1,14 @@
 # Changes
 
+## Free-Tier Twilio Sandbox Deployment
+
+- Run Alembic migrations with retries in the Docker start command, avoiding Render's paid pre-deploy feature.
+- Reduce the Sandbox web service to one Gunicorn worker and remove paid worker services from the free-tier Blueprint.
+- Add a public, non-secret `/api/health/twilio` readiness check for provider configuration, callback URL, database schema, and Redis.
+- Reject incompatible Twilio Conversations payloads with an explicit error instead of silently returning success.
+- Derive public and callback URLs from Render's automatic external URL when explicit values are not set.
+- Keep Google Sheets credentials and sales routing optional for basic chat startup.
+
 ## Code Review Fixes
 
 - Hardened WhatsApp webhook handling so non-text messages are acknowledged without crashing or corrupting the conversation state.

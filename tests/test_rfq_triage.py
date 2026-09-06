@@ -13,7 +13,8 @@ def test_split_requested_items_detects_procurement_lists():
 
     assert items == ["gloves x10", "catheters x5", "IV sets x20"]
     assert is_bulk_request("gloves x10, catheters x5")
-    assert is_complex_bulk_request("a, b, c, d")
+    assert not is_complex_bulk_request("a, b, c, d, e")
+    assert is_complex_bulk_request("a, b, c, d, e, f")
 
 
 def test_parse_direct_rfq_message_keeps_single_item_rfq_specific():

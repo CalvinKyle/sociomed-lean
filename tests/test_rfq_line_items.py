@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.data_access.procurement import create_rfq_record, get_rfq_line_items
+from app.data_access.procurement import create_rfq_record, get_buyer_profile, get_rfq_line_items
 from app.models.db import Base
 from app.schemas.schemas import RFQCreate
 
@@ -48,6 +48,10 @@ def test_legacy_rfq_shape_creates_one_line_item():
         assert items[0].product_id == "P-1"
         assert items[0].quantity == 2
         assert items[0].line_total is None
+        profile = get_buyer_profile(db, "+256700000000")
+        assert profile.contact_name == "Dr. Ali"
+        assert profile.organization == "Key Care Mobile Medical Services"
+        assert profile.delivery_location == "Kampala"
     finally:
         db.close()
 

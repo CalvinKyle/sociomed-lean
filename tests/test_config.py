@@ -8,10 +8,18 @@ from app.core import config as config_module
 def _reload_config(monkeypatch, **env):
     managed_keys = {
         "APP_ENV",
+        "WHATSAPP_PROVIDER",
+        "ASYNC_WHATSAPP_PROCESSING",
         "VERIFY_TOKEN",
         "WHATSAPP_TOKEN",
         "PHONE_NUMBER_ID",
         "WHATSAPP_APP_SECRET",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_WHATSAPP_FROM",
+        "TWILIO_WEBHOOK_URL",
+        "TWILIO_STATUS_CALLBACK_URL",
+        "RENDER_EXTERNAL_URL",
         "GOOGLE_CREDS_FILE",
         "GOOGLE_CREDS_JSON",
         "SHEET_NAME",
@@ -21,6 +29,7 @@ def _reload_config(monkeypatch, **env):
         "REDIS_PORT",
         "REDIS_DB",
         "CACHE_TTL_SECONDS",
+        "SMALL_RFQ_MAX_ITEMS",
         "SESSION_TTL",
         "SESSION_VERSION",
         "DEFAULT_CURRENCY",
@@ -61,6 +70,26 @@ def test_build_redis_url_preserves_credentials_and_switches_databases(monkeypatc
     assert config.build_redis_url(db=1) == "redis://default:s3cr3t@redis.example.com:6379/1"
 
 
+def test_intent_flow_runtime_defaults(monkeypatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.SESSION_TTL == 3600
+    assert config.SESSION_VERSION == 2
+    assert config.SMALL_RFQ_MAX_ITEMS == 5
+
+
+def test_async_whatsapp_processing_defaults_to_inline(monkeypatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.ASYNC_WHATSAPP_PROCESSING is False
+
+
+def test_async_whatsapp_processing_can_be_disabled_for_sandbox(monkeypatch):
+    config = _reload_config(monkeypatch, ASYNC_WHATSAPP_PROCESSING="false")
+
+    assert config.ASYNC_WHATSAPP_PROCESSING is False
+
+
 def test_validate_config_allows_local_start_without_whatsapp_credentials(monkeypatch):
     config = _reload_config(
         monkeypatch,
@@ -94,6 +123,87 @@ def test_validate_config_requires_whatsapp_and_public_routing_in_production(monk
     assert "VERIFY_TOKEN" in message
     assert "WHATSAPP_TOKEN" in message
     assert "PHONE_NUMBER_ID" in message
-    assert "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE" in message
     assert "PUBLIC_BASE_URL" in message
-    assert "API_KEY" in message
+    assert "API_KEY" not in message
+
+
+def test_validate_config_rejects_local_database_fallbacks_in_production(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        VERIFY_TOKEN="verify-token",
+        WHATSAPP_TOKEN="meta-token",
+        PHONE_NUMBER_ID="123",
+        WHATSAPP_APP_SECRET="app-secret",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        API_KEY="api-key",
+    )
+
+    with pytest.raises(Exception) as exc:
+        config.validate_config()
+
+    message = str(exc.value)
+    assert "DATABASE_URL" in message
+    assert "REDIS_URL_OR_HOST" in message
+
+
+def test_render_external_url_supplies_public_and_twilio_callback_urls(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        RENDER_EXTERNAL_URL="https://sociomed-beta.onrender.com/",
+    )
+
+    assert config.PUBLIC_BASE_URL == "https://sociomed-beta.onrender.com"
+    assert config.TWILIO_WEBHOOK_URL == "https://sociomed-beta.onrender.com/api/webhook/twilio"
+    assert config.TWILIO_STATUS_CALLBACK_URL == "https://sociomed-beta.onrender.com/api/webhook/twilio/status"
+
+
+def test_validate_config_requires_twilio_credentials_when_twilio_is_selected(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        WHATSAPP_PROVIDER="twilio",
+        DATABASE_URL="sqlite:///./test.db",
+        REDIS_HOST="localhost",
+        GOOGLE_CREDS_JSON="{}",
+        SALES_AGENT_PHONE="+256700222222",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        API_KEY="secret",
+        TWILIO_ACCOUNT_SID="",
+        TWILIO_AUTH_TOKEN="",
+        TWILIO_WHATSAPP_FROM="",
+        TWILIO_WEBHOOK_URL="",
+    )
+
+    with pytest.raises(Exception) as exc:
+        config.validate_config()
+
+    message = str(exc.value)
+    assert "TWILIO_ACCOUNT_SID" in message
+    assert "TWILIO_AUTH_TOKEN" in message
+    assert "TWILIO_WHATSAPP_FROM" in message
+    assert "TWILIO_WEBHOOK_URL" not in message
+    assert config.TWILIO_WEBHOOK_URL == "https://sociomed-beta.onrender.com/api/webhook/twilio"
+    assert "VERIFY_TOKEN" not in message
+
+
+def test_validate_config_accepts_complete_twilio_production_settings(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        WHATSAPP_PROVIDER="twilio",
+        ASYNC_WHATSAPP_PROCESSING="false",
+        DATABASE_URL="sqlite:///./test.db",
+        REDIS_HOST="localhost",
+        GOOGLE_CREDS_JSON="{}",
+        SALES_AGENT_PHONE="+256700222222",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        API_KEY="secret",
+        TWILIO_ACCOUNT_SID="AC123",
+        TWILIO_AUTH_TOKEN="auth-token",
+        TWILIO_WHATSAPP_FROM="whatsapp:+14155238886",
+        TWILIO_WEBHOOK_URL="https://sociomed-beta.onrender.com/api/webhook/twilio",
+    )
+
+    config.validate_config()
+    assert config.ASYNC_WHATSAPP_PROCESSING is False

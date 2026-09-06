@@ -1,4 +1,4 @@
-# SocioMed Lean
+# SocioMED Lean
 
 WhatsApp-native procurement infrastructure for medical supplies in East Africa.
 
@@ -31,8 +31,14 @@ Once deployed, these are the endpoints worth handing to your first design partne
   Capture buyer interest from a landing page or sales form. Requires `X-API-Key`.
 - `POST /api/rfqs`
   Submit quotation requests from a web form, sales ops tool, or onboarding workflow. Requires `X-API-Key`.
+- `POST /api/webhook/twilio`
+  Receives signed incoming WhatsApp messages from the Twilio Sandbox or an approved Twilio sender.
+- `POST /api/webhook/twilio/status`
+  Receives signed Twilio delivery status callbacks.
+- `GET /api/health/twilio`
+  Warms a free Render service and verifies the worker-free Sandbox configuration, schema, database, and Redis without exposing secrets.
 - `POST /api/webhook`
-  Receives incoming WhatsApp messages from Meta.
+  Retains support for incoming WhatsApp messages from Meta Cloud API.
 
 ## Quick Start
 
@@ -48,8 +54,25 @@ uvicorn app.main:app --reload
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) to test the procurement endpoints.
 
+Each successful catalog sync records one transactional version. Inspect recent
+versions or drill into changes without loading Google Sheets again:
+
+```bash
+python3 sync_sheets_to_db.py --list-versions 20
+python3 sync_sheets_to_db.py --version-changes 12
+python3 sync_sheets_to_db.py --entity-history JMS-0826
+```
+
+Invalid rows are skipped and recorded with their validation reason. Valid rows
+continue to sync; repeated unchanged rows are not written or added to the change
+log.
+
+Twilio beta guide: [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md)
 Production environment reference: [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md)
 Data blueprint reference: [docs/DATA_BLUEPRINT.md](docs/DATA_BLUEPRINT.md)
+Intent-first WhatsApp flow: [docs/WHATSAPP_INTENT_FLOW.md](docs/WHATSAPP_INTENT_FLOW.md)
+Editable conversation copy and full state logic: [docs/WHATSAPP_CONVERSATION_LOGIC.md](docs/WHATSAPP_CONVERSATION_LOGIC.md)
+Catalog and PostgreSQL sync review: [docs/CATALOG_SYNC_REVIEW.md](docs/CATALOG_SYNC_REVIEW.md)
 
 ## Environment Sections
 
@@ -57,26 +80,31 @@ These are the concrete setup sections you need to address next:
 
 1. Shared identity and routing
    Set `APP_ENV`, `PUBLIC_BASE_URL`, `SUPPORT_EMAIL`, `SALES_AGENT_PHONE`, `DEFAULT_CURRENCY`, `ENABLE_OPEN_DOCS`, `API_KEY`, and `LOG_LEVEL`.
-2. Meta WhatsApp Cloud API
-   Set `VERIFY_TOKEN`, `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID`, and `WHATSAPP_APP_SECRET`.
-3. Google Sheets sync
+2. WhatsApp provider and processing
+   Set `WHATSAPP_PROVIDER=twilio` and `ASYNC_WHATSAPP_PROCESSING=false` for worker-free Sandbox testing. Set the processing flag to `true` only when a Celery worker is deployed.
+3. Twilio WhatsApp
+   Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `TWILIO_WEBHOOK_URL`, and optionally `TWILIO_STATUS_CALLBACK_URL`.
+4. Meta WhatsApp Cloud API
+   When using Meta, set `VERIFY_TOKEN`, `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID`, and `WHATSAPP_APP_SECRET`.
+5. Google Sheets sync
    Use `GOOGLE_CREDS_FILE=.secrets/google-service-account.json` locally or `GOOGLE_CREDS_JSON` in production, plus `SHEET_NAME=sociomed_db`.
-4. Database and Redis
-   Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=1800`, and `CACHE_TTL_SECONDS=300`.
-5. Render deployment
-   The web service and Celery worker must share the same WhatsApp, Postgres, Redis, and sales-routing variables.
+6. Database and Redis
+   Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=3600`, `SESSION_VERSION=2`, `SMALL_RFQ_MAX_ITEMS=5`, and `CACHE_TTL_SECONDS=300`.
+7. Render deployment
+   Free Sandbox mode needs only the web service, Key Value, and Postgres. The Docker start script applies Alembic migrations before starting a single Gunicorn worker.
 
-Use [.env.example](.env.example) for local machines and [.env.production.example](.env.production.example) for production values.
+Use [.env.example](.env.example) for local machines and [.env.production.example](.env.production.example) for production values. The examples contain placeholders only; real credentials belong in `.env.local` or the Render Environment page.
 
 ## Architecture
 
 ```text
-WhatsApp Cloud API ──▶ FastAPI (routes) ──▶ services ──▶ data_access ──▶ PostgreSQL
-                              │                                   ▲
-                              ▼                                   │
-                          Celery (async)                     Redis (cache)
-                              │
-                      Google Sheets ──▶ sync_sheets_to_db.py ──▶ PostgreSQL
+Twilio / Meta WhatsApp ──▶ FastAPI (routes) ──▶ services ──▶ data_access ──▶ PostgreSQL
+                                  │                                   ▲
+                                  ├── synchronous Sandbox             │
+                                  ▼                                   │
+                         Celery (optional async)                 Redis (state)
+                                  │
+                          Google Sheets ──▶ sync_sheets_to_db.py ──▶ PostgreSQL
 ```
 
 ## Project Structure
@@ -90,11 +118,11 @@ WhatsApp Cloud API ──▶ FastAPI (routes) ──▶ services ──▶ data_
 - `app/core/` — Configuration, authentication, caching, currency, logging, and shared infrastructure.
 - `migrations/` — Alembic database migrations.
 - `tests/` — Automated pytest coverage for routes, services, and data behavior.
-- `docs/` — Environment and data-blueprint documentation.
+- `docs/` — Environment, Twilio beta, and data-blueprint documentation.
 
 ## Product Model
 
-SocioMed is intentionally `RFQ-first`.
+SocioMED is intentionally `RFQ-first`.
 
 - Persist buyer leads and RFQs.
 - Do not force a cart-and-checkout order flow yet.
@@ -113,7 +141,9 @@ Primary catalog tables:
 Commercial pipeline tables:
 
 - `buyer_leads`
+- `buyer_profiles`
 - `rfq_requests`
+- `rfq_line_items`
 
 ## Launch Checklist
 
@@ -122,16 +152,32 @@ Before outreach, make sure these are done:
 1. Load a high-confidence catalog into Sheets, then run `python3 sync_sheets_to_db.py`.
 2. Set `SALES_AGENT_PHONE` so every buyer request gets routed to a human.
 3. Deploy the API and verify authenticated `/api/health`, `/docs`, public `/api/catalog/featured`, and public `/api/catalog/search?q=gloves`.
-4. Connect the Meta webhook to `/api/webhook` and confirm verification succeeds with `hub.verify_token`.
-5. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at authenticated `/api/leads` and `/api/rfqs`.
-6. Use procurement-language messaging in outreach: faster supplier comparison, RFQ turnaround, stock visibility, and WhatsApp-native ordering.
+4. For Twilio beta, set `ASYNC_WHATSAPP_PROCESSING=false` and `RUN_DB_MIGRATIONS=true`, follow [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md), warm `/api/health/twilio`, join each tester to the Sandbox, and point the Sandbox webhook to `/api/webhook/twilio`.
+5. For Meta, connect the webhook to `/api/webhook` and confirm verification succeeds with `hub.verify_token`.
+6. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at authenticated `/api/leads` and `/api/rfqs`.
+7. Use procurement-language messaging in outreach: faster supplier comparison, RFQ turnaround, stock visibility, and WhatsApp-native ordering.
 
-## Async Processing
+## WhatsApp Processing Modes
 
-Webhook messages are offloaded to Celery for responsiveness.
+For low-volume Twilio Sandbox testing:
 
-- Run locally: `celery -A app.core.celery_app worker --loglevel=info`
-- Monitor with Flower if needed
+```text
+ASYNC_WHATSAPP_PROCESSING=false
+```
+
+The web service runs the existing WhatsApp handler directly. Redis still provides sessions, caching, duplicate protection, and sender locks. A Celery worker is not required.
+
+For production asynchronous processing:
+
+```text
+ASYNC_WHATSAPP_PROCESSING=true
+```
+
+Deploy a Celery worker connected to the same Redis instance:
+
+```bash
+celery -A app.core.celery_app worker --loglevel=info
+```
 
 ## Testing
 
@@ -152,9 +198,10 @@ Run the test suite locally before opening a pull request. All pull requests are 
 
 ## Notes
 
-- Schema changes are handled only by Alembic migrations; run `alembic upgrade head` before starting or syncing.
+- Schema changes are handled only by Alembic migrations. Local environments run `alembic upgrade head` manually; the free Render web container runs it at startup when `RUN_DB_MIGRATIONS=true`.
 - Redis can be configured with either `REDIS_URL` or `REDIS_HOST` plus `REDIS_PORT`.
 - Swagger docs can be disabled in production with `ENABLE_OPEN_DOCS=false`.
+- Keep `TWILIO_AUTH_TOKEN`, Meta tokens, Google credentials, database passwords, and API keys out of git.
 
 ## License
 

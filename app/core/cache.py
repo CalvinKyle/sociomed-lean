@@ -3,9 +3,10 @@ import redis
 from typing import Dict, Any
 import logging
 
-from app.core.sheet_sync import split_multi_value_cell
 from app.core.config import CACHE_TTL_SECONDS, build_redis_url
+from app.core.sheet_sync import split_multi_value_cell
 from app.models.db import load_data   # This pulls the full dataset from PostgreSQL
+from app.services.search import _build_search_documents
 
 logger = logging.getLogger(__name__)
 
@@ -19,39 +20,6 @@ redis_client = redis.Redis.from_url(
 )
 
 CACHE_KEY = "sociomed:full_data"   # All products, inventory, pricing, etc.
-
-
-def _build_search_documents(data: dict) -> list[dict]:
-    products_by_id = {product["product_id"]: product for product in data.get("products", [])}
-    aliases_by_product = {}
-    for alias in data.get("aliases", []):
-        product_id = alias.get("product_id")
-        alias_text = alias.get("alias")
-        if product_id and alias_text:
-            aliases_by_product.setdefault(product_id, []).append(alias_text)
-
-    skus_by_product = {}
-    for inventory_item in data.get("inventory", []):
-        product_id = inventory_item.get("product_id")
-        sku = inventory_item.get("sku")
-        if product_id and sku:
-            skus_by_product.setdefault(product_id, []).append(sku)
-
-    documents = []
-    for product_id, product in products_by_id.items():
-        documents.append(
-            {
-                "product_id": product_id,
-                "fields": [
-                    {"name": "alias", "weight": 1.25, "values": aliases_by_product.get(product_id, [])},
-                    {"name": "name", "weight": 1.15, "values": [product.get("name", "")]},
-                    {"name": "clinical_speciality", "weight": 0.95, "values": split_multi_value_cell(product.get("clinical_speciality"))},
-                    {"name": "category", "weight": 0.75, "values": [product.get("category", "")]},
-                    {"name": "sku", "weight": 0.8, "values": skus_by_product.get(product_id, [])},
-                ],
-            }
-        )
-    return documents
 
 
 def _build_related_product_indexes(data: dict) -> None:
@@ -91,7 +59,12 @@ def build_indexes(data: dict) -> dict:
         iid = pr["inventory_id"]
         data["pricing_by_inventory"].setdefault(iid, []).append(pr)
 
-    data["search_documents"] = _build_search_documents(data)
+    data["search_documents"] = _build_search_documents(
+        data.get("products", []),
+        data.get("aliases", []),
+        data.get("inventory", []),
+        data.get("product_attributes", []),
+    )
     _build_related_product_indexes(data)
 
     return data

@@ -81,7 +81,7 @@ def test_whatsapp_category_browse_flows_into_offer_selection(monkeypatch):
 
     sender = "256700111111"
 
-    asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "6"}}))
+    asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "2"}}))
     assert "Browse procurement categories" in sent_messages[-1]
     assert session_store[sender]["state"] == ConversationState.BROWSING_CATEGORIES.value
 
@@ -90,7 +90,7 @@ def test_whatsapp_category_browse_flows_into_offer_selection(monkeypatch):
     assert session_store[sender]["state"] == ConversationState.CATEGORY_SELECTED.value
 
     asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "1"}}))
-    assert "Available Supplier Offers" in sent_messages[-1]
+    assert "Available Options" in sent_messages[-1]
     assert session_store[sender]["state"] == ConversationState.VIEWING_RESULTS.value
     assert session_store[sender]["product"]["product_id"] == "p1"
 
@@ -114,7 +114,7 @@ def test_fuzzy_category_and_product_selection(monkeypatch):
     assert whatsapp_service._resolve_category_selection("mask", ["face masks", "oxygen masks"]) is None
 
 
-def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch):
+def test_returning_sender_with_expired_session_restarts_from_current_intent(monkeypatch):
     sent_messages = []
     saved_sessions = {}
 
@@ -126,6 +126,9 @@ def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch)
     monkeypatch.setattr(whatsapp_service, "has_seen_before", lambda _user: True)
     monkeypatch.setattr(whatsapp_service, "save_session", lambda user, data: saved_sessions.update({user: data}))
     monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(whatsapp_service, "get_cached_data", lambda: {"products": [], "aliases": []})
+    monkeypatch.setattr(whatsapp_service, "get_categories", lambda: [])
+    monkeypatch.setattr(whatsapp_service, "_load_buyer_profile", lambda _sender: None)
 
     asyncio.run(
         whatsapp_service.handle_incoming_message(
@@ -133,7 +136,7 @@ def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch)
         )
     )
 
-    assert "previous session timed out" in sent_messages[0]
+    assert "Welcome to SocioMED" in sent_messages[0]
     assert saved_sessions["256700111111"]["state"] == ConversationState.MENU.value
 
 

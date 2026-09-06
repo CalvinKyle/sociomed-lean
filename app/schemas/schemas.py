@@ -79,6 +79,13 @@ class RFQCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
     currency: str = Field(default="UGX", max_length=10)
     source: str = Field(default="api", max_length=50)
+    procurement_stage: str = Field(default="formal_purchase", max_length=50)
+    formal_quote: bool = True
+    required_by: Optional[str] = Field(default=None, max_length=120)
+    payment_preference: Optional[str] = Field(default=None, max_length=120)
+    destination_country: Optional[str] = Field(default=None, max_length=80)
+    equipment_review_required: bool = False
+    manual_review_reason: Optional[str] = Field(default=None, max_length=120)
 
     product_name: Optional[str] = Field(default=None, max_length=160)
     product_id: Optional[str] = Field(default=None, max_length=120)

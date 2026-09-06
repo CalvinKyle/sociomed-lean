@@ -190,3 +190,22 @@ def test_related_product_selection_reuses_supplier_offer_flow(monkeypatch):
     assert "Available Supplier Offers for Dental Bur" in sent_messages[-1]
     assert session_store[sender]["state"] == ConversationState.VIEWING_RESULTS.value
     assert session_store[sender]["product"]["product_id"] == "p2"
+
+
+def test_returning_buyer_can_submit_short_rfq_format():
+    from app.services.rfq_triage import parse_direct_rfq_message
+
+    payload = parse_direct_rfq_message(
+        "Surgical gloves | 25",
+        buyer_profile={
+            "contact_name": "Dr. Ali",
+            "organization": "Mulago Hospital",
+            "delivery_location": "Kampala",
+        },
+    )
+
+    assert payload.buyer_name == "Dr. Ali"
+    assert payload.organization == "Mulago Hospital"
+    assert payload.delivery_location == "Kampala"
+    assert payload.quantity == 25
+    assert payload.source == "whatsapp_returning_buyer_rfq"

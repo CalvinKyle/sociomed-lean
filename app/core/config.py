@@ -8,11 +8,37 @@ load_dotenv(".env.local", override=True)
 
 APP_ENV = os.getenv("APP_ENV", "development").lower()
 
-# WhatsApp
+# WhatsApp provider
+SUPPORTED_WHATSAPP_PROVIDERS = {"meta", "twilio"}
+WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "meta").lower()
+ASYNC_WHATSAPP_PROCESSING = os.getenv("ASYNC_WHATSAPP_PROCESSING", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+# Meta WhatsApp Cloud API
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET")
+
+# Public URL. Render supplies RENDER_EXTERNAL_URL automatically, so the free
+# deployment does not need a second copy of its own onrender.com URL.
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or RENDER_EXTERNAL_URL).rstrip("/")
+
+# Twilio WhatsApp
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")
+TWILIO_WEBHOOK_URL = os.getenv("TWILIO_WEBHOOK_URL") or (
+    f"{PUBLIC_BASE_URL}/api/webhook/twilio" if PUBLIC_BASE_URL else None
+)
+TWILIO_STATUS_CALLBACK_URL = os.getenv("TWILIO_STATUS_CALLBACK_URL") or (
+    f"{PUBLIC_BASE_URL}/api/webhook/twilio/status" if PUBLIC_BASE_URL else None
+)
 
 # Google Sheets (still used by sync script)
 GOOGLE_CREDS_FILE = os.getenv("GOOGLE_CREDS_FILE", ".secrets/google-service-account.json")
@@ -34,10 +60,10 @@ REDIS_DB = int(os.getenv("REDIS_DB", str(_default_redis_db)))
 
 # App settings
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", 300))
-SESSION_TTL = int(os.getenv("SESSION_TTL", 1800))
-SESSION_VERSION = int(os.getenv("SESSION_VERSION", "1"))
+SMALL_RFQ_MAX_ITEMS = int(os.getenv("SMALL_RFQ_MAX_ITEMS", "5"))
+SESSION_TTL = int(os.getenv("SESSION_TTL", 3600))
+SESSION_VERSION = int(os.getenv("SESSION_VERSION", "2"))
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "UGX")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "sales@socio-med.com")
 SALES_AGENT_PHONE = os.getenv("SALES_AGENT_PHONE")
 ENABLE_OPEN_DOCS = os.getenv("ENABLE_OPEN_DOCS", "true").lower() == "true"
@@ -48,35 +74,52 @@ DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
 DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 DB_POOL_RECYCLE_SECONDS = int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300"))
 
+
 def build_redis_url(db: int | None = None) -> str:
     target_db = REDIS_DB if db is None else db
     if _parsed_redis_url:
         return _parsed_redis_url._replace(path=f"/{target_db}").geturl()
     return f"redis://{REDIS_HOST}:{REDIS_PORT}/{target_db}"
 
+
 def validate_config():
+    if WHATSAPP_PROVIDER not in SUPPORTED_WHATSAPP_PROVIDERS:
+        providers = ", ".join(sorted(SUPPORTED_WHATSAPP_PROVIDERS))
+        raise Exception(f"WHATSAPP_PROVIDER must be one of: {providers}")
+
     missing = []
     required = {
-        "DATABASE_URL": DATABASE_URL,
-        "REDIS_URL_OR_HOST": REDIS_URL or REDIS_HOST,
+        "DATABASE_URL": os.getenv("DATABASE_URL") if APP_ENV == "production" else DATABASE_URL,
+        "REDIS_URL_OR_HOST": (
+            (REDIS_URL or os.getenv("REDIS_HOST"))
+            if APP_ENV == "production"
+            else (REDIS_URL or REDIS_HOST)
+        ),
     }
     if APP_ENV == "production":
-        google_credentials_available = bool(GOOGLE_CREDS_JSON) or (
-            bool(GOOGLE_CREDS_FILE) and os.path.exists(GOOGLE_CREDS_FILE)
-        )
         required.update(
             {
-                "VERIFY_TOKEN": VERIFY_TOKEN,
-                "WHATSAPP_TOKEN": WHATSAPP_TOKEN,
-                "PHONE_NUMBER_ID": PHONE_NUMBER_ID,
-                "WHATSAPP_APP_SECRET": WHATSAPP_APP_SECRET,
-                "GOOGLE_CREDS_JSON_OR_EXISTING_GOOGLE_CREDS_FILE": google_credentials_available,
-                "SHEET_NAME": SHEET_NAME,
-                "SALES_AGENT_PHONE": SALES_AGENT_PHONE,
                 "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
-                "API_KEY": API_KEY,
             }
         )
+        if WHATSAPP_PROVIDER == "twilio":
+            required.update(
+                {
+                    "TWILIO_ACCOUNT_SID": TWILIO_ACCOUNT_SID,
+                    "TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN,
+                    "TWILIO_WHATSAPP_FROM": TWILIO_WHATSAPP_FROM,
+                    "TWILIO_WEBHOOK_URL": TWILIO_WEBHOOK_URL,
+                }
+            )
+        else:
+            required.update(
+                {
+                    "VERIFY_TOKEN": VERIFY_TOKEN,
+                    "WHATSAPP_TOKEN": WHATSAPP_TOKEN,
+                    "PHONE_NUMBER_ID": PHONE_NUMBER_ID,
+                    "WHATSAPP_APP_SECRET": WHATSAPP_APP_SECRET,
+                }
+            )
     for key, value in required.items():
         if not value:
             missing.append(key)

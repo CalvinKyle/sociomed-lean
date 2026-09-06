@@ -1,15 +1,12 @@
 services:
   - type: web
     name: sociomed-lean
-    env: docker
-    region: us-east
-    plan: standard
-    
+    runtime: docker
+    plan: free
+    branch: codex/twilio-whatsapp-beta
+    autoDeployTrigger: commit
     healthCheckPath: /api/health/liveness
-    healthCheckInterval: 30
-    
-    autoDeploy: false
-    
+
     envVars:
       - key: APP_ENV
         value: production
@@ -17,160 +14,62 @@ services:
         value: INFO
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: VERIFY_TOKEN
+      - key: RUN_DB_MIGRATIONS
+        value: "true"
+      - key: MIGRATION_MAX_ATTEMPTS
+        value: "12"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: GUNICORN_TIMEOUT_SECONDS
+        value: "120"
+      - key: WHATSAPP_PROVIDER
+        value: twilio
+      - key: ASYNC_WHATSAPP_PROCESSING
+        value: "false"
+      - key: TWILIO_ACCOUNT_SID
         sync: false
-      - key: WHATSAPP_TOKEN
+      - key: TWILIO_AUTH_TOKEN
         sync: false
-      - key: PHONE_NUMBER_ID
+      - key: TWILIO_WHATSAPP_FROM
         sync: false
-      - key: WHATSAPP_APP_SECRET
+      - key: TWILIO_WEBHOOK_URL
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
         sync: false
       - key: SALES_AGENT_PHONE
         sync: false
       - key: SUPPORT_EMAIL
         value: sales@socio-med.com
-      - key: PUBLIC_BASE_URL
-        value: https://api.socio-med.com
       - key: ENABLE_OPEN_DOCS
         value: "false"
       - key: API_KEY
-        sync: false
-      - key: GOOGLE_CREDS_FILE
-        value: .secrets/google-service-account.json
-      - key: GOOGLE_CREDS_JSON
-        sync: false
-      - key: SHEET_NAME
-        value: sociomed_db
+        generateValue: true
       - key: DATABASE_URL
-        fromService:
+        fromDatabase:
           name: sociomed-postgres
-          type: pgsql
           property: connectionString
-      - key: REDIS_HOST
+      - key: REDIS_URL
         fromService:
+          type: keyvalue
           name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
+          property: connectionString
       - key: CACHE_TTL_SECONDS
         value: "300"
       - key: SESSION_TTL
-        value: "1800"
+        value: "3600"
+      - key: SESSION_VERSION
+        value: "2"
+      - key: SMALL_RFQ_MAX_ITEMS
+        value: "5"
       - key: DEFAULT_CURRENCY
         value: UGX
 
-  # render.yaml — replace the Celery worker block
-
-  - type: worker
-    name: sociomed-lean-celery-worker
-    env: python
-    region: us-east
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: LOG_LEVEL
-        value: INFO
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: PHONE_NUMBER_ID
-        sync: false
-      - key: WHATSAPP_APP_SECRET
-        sync: false
-      - key: SALES_AGENT_PHONE
-        sync: false
-      - key: SUPPORT_EMAIL
-        value: sales@socio-med.com
-      - key: PUBLIC_BASE_URL
-        value: https://api.socio-med.com
-      - key: DEFAULT_CURRENCY
-        value: UGX
-      - key: DATABASE_URL
-        fromService:
-          name: sociomed-postgres
-          type: pgsql
-          property: connectionString
-      - key: REDIS_HOST
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
-
-  - type: worker
-    name: sociomed-lean-celery-beat
-    env: python
-    region: us-east
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app beat --loglevel=info
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: LOG_LEVEL
-        value: INFO
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: PHONE_NUMBER_ID
-        sync: false
-      - key: SALES_AGENT_PHONE
-        sync: false
-      - key: DATABASE_URL
-        fromService:
-          name: sociomed-postgres
-          type: pgsql
-          property: connectionString
-      - key: REDIS_HOST
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
-
-  # ── Flower Monitoring Dashboard (added)
-  - type: web
-    name: sociomed-lean-flower
-    env: python
-    region: us-east
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app flower --address=0.0.0.0 --port=$PORT --basic-auth=admin:$FLOWER_PASSWORD
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: REDIS_HOST
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          name: sociomed-redis
-          type: redis
-          property: port
-      - key: FLOWER_PASSWORD
-        sync: false   # Set this manually in Render dashboard (strong password)
-
-  - type: redis
+  - type: keyvalue
     name: sociomed-redis
-    region: us-east
     plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
 
-  - type: pgsql
-    name: sociomed-postgres
-    region: us-east
-    plan: free   # change to starter when you go live
+databases:
+  - name: sociomed-postgres
+    plan: free
