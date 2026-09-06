@@ -1,4 +1,4 @@
-# SocioMed Lean
+# SocioMED Lean
 
 WhatsApp-native procurement infrastructure for medical supplies in East Africa.
 
@@ -58,6 +58,8 @@ Twilio beta guide: [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md)
 Production environment reference: [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md)
 Data blueprint reference: [docs/DATA_BLUEPRINT.md](docs/DATA_BLUEPRINT.md)
 Intent-first WhatsApp flow: [docs/WHATSAPP_INTENT_FLOW.md](docs/WHATSAPP_INTENT_FLOW.md)
+Editable conversation copy and full state logic: [docs/WHATSAPP_CONVERSATION_LOGIC.md](docs/WHATSAPP_CONVERSATION_LOGIC.md)
+Catalog and PostgreSQL sync review: [docs/CATALOG_SYNC_REVIEW.md](docs/CATALOG_SYNC_REVIEW.md)
 
 ## Environment Sections
 
@@ -107,7 +109,7 @@ Twilio / Meta WhatsApp ──▶ FastAPI (routes) ──▶ services ──▶ d
 
 ## Product Model
 
-SocioMed is intentionally `RFQ-first`.
+SocioMED is intentionally `RFQ-first`.
 
 - Persist buyer leads and RFQs.
 - Do not force a cart-and-checkout order flow yet.

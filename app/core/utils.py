@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 # Redis client for sessions + caching
 redis_client = redis.Redis.from_url(build_redis_url(), decode_responses=True)
 SEEN_MARKER_TTL_SECONDS = 60 * 60 * 24 * 30
+BRAND_WORDMARK = "SocioMED"
+BRAND_SIGNATURE = f"— {BRAND_WORDMARK}"
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,14 @@ def _twilio_whatsapp_address(phone: str) -> str:
     if not number.startswith("+"):
         number = f"+{number}"
     return f"whatsapp:{number}"
+
+
+def brand_whatsapp_message(message: str) -> str:
+    """Ensure every outbound chat contains the exact SocioMED wordmark."""
+    clean_message = str(message).rstrip()
+    if BRAND_WORDMARK in clean_message:
+        return clean_message
+    return f"{clean_message}\n\n{BRAND_SIGNATURE}"
 
 
 async def _send_meta_whatsapp_message(to: str, message: str) -> WhatsAppSendResult:
@@ -161,11 +171,12 @@ async def _send_twilio_whatsapp_message(to: str, message: str) -> WhatsAppSendRe
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
 async def send_whatsapp_message_result(to: str, message: str) -> WhatsAppSendResult:
+    branded_message = brand_whatsapp_message(message)
     try:
         if WHATSAPP_PROVIDER == "twilio":
-            return await _send_twilio_whatsapp_message(to, message)
+            return await _send_twilio_whatsapp_message(to, branded_message)
         if WHATSAPP_PROVIDER == "meta":
-            return await _send_meta_whatsapp_message(to, message)
+            return await _send_meta_whatsapp_message(to, branded_message)
         return WhatsAppSendResult(
             recipient=to,
             success=False,

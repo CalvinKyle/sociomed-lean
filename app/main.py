@@ -17,13 +17,13 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     setup_logging()
     validate_config()
-    print("🚀 SocioMed Lean procurement backend is now running!")
+    print("🚀 SocioMED Lean procurement backend is now running!")
     yield
     # Optional: clean shutdown logic here later
 
 
 app = FastAPI(
-    title="SocioMed Lean",
+    title="SocioMED Lean",
     description="Procurement-ready WhatsApp marketplace for medical suppliers and buyers.",
     version="2.1.0",
     lifespan=lifespan,
@@ -45,7 +45,7 @@ app.include_router(api_router)
 @app.get("/", dependencies=[Depends(require_api_key)])
 async def root():
     return {
-        "message": "SocioMed Lean procurement API",
+        "message": "SocioMED Lean procurement API",
         "status": "running",
         "operating_model": "rfq_first",
         "whatsapp_provider": WHATSAPP_PROVIDER,

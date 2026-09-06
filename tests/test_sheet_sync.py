@@ -1,4 +1,11 @@
-from app.core.sheet_sync import prepare_sheet_data, split_multi_value_cell, summarize_vendor_phone_issues
+import pytest
+
+from app.core.sheet_sync import (
+    prepare_sheet_data,
+    split_multi_value_cell,
+    summarize_vendor_phone_issues,
+    validate_catalog_snapshot,
+)
 
 
 def test_prepare_sheet_data_normalizes_headers_and_vendor_phone():
@@ -76,3 +83,33 @@ def test_summarize_vendor_phone_issues_counts_missing_and_invalid_numbers():
     )
 
     assert summary == {"valid": 1, "missing": 1, "invalid": 1}
+
+
+def test_validate_catalog_snapshot_accepts_linked_positive_catalog():
+    validate_catalog_snapshot(
+        {
+            "products": [{"product_id": "p1", "name": "Suture", "category": "Consumables"}],
+            "vendors": [{"vendor_id": "v1", "name": "Supplier"}],
+            "inventory": [{"inventory_id": "i1", "product_id": "p1", "vendor_id": "v1"}],
+            "pricing": [{"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 1, "unit_price": 100}],
+            "aliases": [{"alias": "suture | sutures", "product_id": "p1"}],
+        }
+    )
+
+
+def test_validate_catalog_snapshot_rejects_orphans_and_blank_pricing_values():
+    with pytest.raises(ValueError) as exc_info:
+        validate_catalog_snapshot(
+            {
+                "products": [{"product_id": "p1", "name": "Suture", "category": "Consumables"}],
+                "vendors": [{"vendor_id": "v1", "name": "Supplier"}],
+                "inventory": [{"inventory_id": "i1", "product_id": "missing", "vendor_id": "v1"}],
+                "pricing": [{"pricing_id": "", "inventory_id": "orphan", "min_qty": 1, "unit_price": ""}],
+                "aliases": [{"alias": "", "product_id": "p1"}],
+            }
+        )
+
+    error = str(exc_info.value)
+    assert "missing pricing_id, unit_price" in error
+    assert "unknown product_id 'missing'" in error
+    assert "unknown inventory_id 'orphan'" in error

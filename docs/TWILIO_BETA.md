@@ -14,7 +14,7 @@ The free-tier deployment runs `alembic upgrade head` from `scripts/start_web.sh`
 - `ASYNC_WHATSAPP_PROCESSING=false` runs the existing WhatsApp handler inside the web request.
 - `ASYNC_WHATSAPP_PROCESSING=true` preserves the Celery queue and worker architecture for production.
 - `POST /api/webhook/twilio/status` records Twilio delivery status callbacks in the audit log.
-- Incoming Twilio payloads are translated into the existing SocioMed conversation flow, so catalog, RFQ, supplier notification, and sales handoff behavior stays unchanged.
+- Incoming Twilio payloads are translated into the existing SocioMED conversation flow, so catalog, RFQ, supplier notification, and sales handoff behavior stays unchanged.
 
 Both modes use the same message-processing service and Redis session lock. See [WHATSAPP_INTENT_FLOW.md](WHATSAPP_INTENT_FLOW.md) for the buyer-routing and privacy contract. If inline processing fails, the message's duplicate-protection claim is released and the webhook returns an error so Twilio can retry.
 
@@ -27,8 +27,8 @@ Open the [Twilio Console](https://console.twilio.com/) and collect these values:
 | `TWILIO_ACCOUNT_SID` | Account Dashboard / Account Info | `AC...` |
 | `TWILIO_AUTH_TOKEN` | Account Dashboard / Account Info, reveal the primary Auth Token | Secret value; do not commit it |
 | `TWILIO_WHATSAPP_FROM` | Messaging > Try it out > Send a WhatsApp message > Sandbox sender | `whatsapp:+14155238886` or the sender Twilio assigns |
-| `TWILIO_WEBHOOK_URL` | Your deployed SocioMed URL plus the inbound path | `https://YOUR-SERVICE.onrender.com/api/webhook/twilio` |
-| `TWILIO_STATUS_CALLBACK_URL` | Your deployed SocioMed URL plus the status path | `https://YOUR-SERVICE.onrender.com/api/webhook/twilio/status` |
+| `TWILIO_WEBHOOK_URL` | Your deployed SocioMED URL plus the inbound path | `https://YOUR-SERVICE.onrender.com/api/webhook/twilio` |
+| `TWILIO_STATUS_CALLBACK_URL` | Your deployed SocioMED URL plus the status path | `https://YOUR-SERVICE.onrender.com/api/webhook/twilio/status` |
 
 Use the exact Sandbox sender shown in your Twilio Console. Do not assume the example number is the sender assigned to your account.
 
@@ -99,7 +99,7 @@ Render free web services sleep after inactivity. Always open the Twilio readines
 From a phone that joined the Sandbox, after `/api/health/twilio` reports `ready`:
 
 1. Send `hello` to the Twilio Sandbox WhatsApp number.
-2. Confirm the SocioMed main menu arrives.
+2. Confirm the SocioMED main menu arrives.
 3. Send `10 boxes of surgical gloves` and confirm search starts without a menu detour.
 4. Send `CATEGORIES` and confirm the live taxonomy appears.
 5. Reply `QUOTE` and submit a sample RFQ.

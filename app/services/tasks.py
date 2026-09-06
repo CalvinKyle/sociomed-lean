@@ -4,6 +4,7 @@ import logging
 from celery import Task
 
 from app.core.celery_app import celery_app
+from app.core.conversation_copy import conversation_message
 from app.core.utils import log_audit_event, send_whatsapp_message
 from app.services.rfq_digest import send_daily_rfq_digest as deliver_daily_rfq_digest
 from app.services.whatsapp_processing import (
@@ -13,10 +14,7 @@ from app.services.whatsapp_processing import (
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_MESSAGE = (
-    "Sorry, I could not complete that request right now. Your message has not been ignored. "
-    "Please try again shortly, or reply 4 from the main menu to contact sales."
-)
+FALLBACK_MESSAGE = conversation_message("worker_failure")
 
 
 class WhatsAppMessageTask(Task):

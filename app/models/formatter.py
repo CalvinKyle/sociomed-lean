@@ -1,4 +1,5 @@
 from app.core.currency import format_price
+from app.core.conversation_copy import conversation_message
 
 
 def format_pricing_tiers(tiers, currency="UGX", uom="unit"):
@@ -20,12 +21,9 @@ def format_price_range(min_price, max_price, currency="UGX"):
 
 def format_results(product_name, results, currency="UGX"):
     if not results:
-        return "No options available. Type 0 to return to the menu.", []
+        return conversation_message("results_empty"), []
 
-    msg = (
-        f"*{product_name} – Available Options*\n\n"
-        "Reply with the offer number you want to request.\n\n"
-    )
+    msg = conversation_message("results_header", product_name=product_name)
     option_map = []
     for counter, item in enumerate(results[:5], start=1):
         all_prices = [tier["unit_price"] for tier in item["pricing"]]
@@ -34,15 +32,23 @@ def format_results(product_name, results, currency="UGX"):
         uom = item.get("uom") or "unit"
         sku = item.get("sku")
 
-        msg += f"*{counter}. {item['brand']}*\n"
+        msg += conversation_message("result_title", counter=counter, brand=item["brand"])
         if sku:
-            msg += f"SKU: {sku}\n"
-        msg += f"UoM: {uom} | {format_price_range(min_price, max_price, currency)}\n"
-        availability = "Available" if (item.get("stock_qty") or 0) > 0 else "Sourcing available"
-        msg += (
-            f"Min qty: {item.get('min_qty', 1)} {uom} | "
-            f"Availability: {availability} | "
-            f"Indicative lead time: {item.get('lead_time_days', 'TBC')} days\n"
+            msg += conversation_message("result_sku", sku=sku)
+        msg += conversation_message(
+            "result_summary",
+            uom=uom,
+            price_range=format_price_range(min_price, max_price, currency),
+        )
+        availability = conversation_message(
+            "availability_in_stock" if (item.get("stock_qty") or 0) > 0 else "availability_sourcing"
+        )
+        msg += conversation_message(
+            "result_availability",
+            min_qty=item.get("min_qty", 1),
+            uom=uom,
+            availability=availability,
+            lead_time_days=item.get("lead_time_days", "TBC"),
         )
         msg += format_pricing_tiers(item["pricing"], currency, uom=uom) + "\n\n"
 
@@ -63,6 +69,6 @@ def format_results(product_name, results, currency="UGX"):
             "pricing": item.get("pricing", []),
         })
 
-    msg += "0 → Main menu"
+    msg += conversation_message("results_footer")
 
     return msg, option_map

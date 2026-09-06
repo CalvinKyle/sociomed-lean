@@ -1,5 +1,5 @@
 """
-sync_sheets_to_db.py  –  SocioMed Lean
+sync_sheets_to_db.py  –  SocioMED Lean
 Upsert-safe sync from Google Sheets → PostgreSQL.
 
 Changes vs original:
@@ -18,7 +18,12 @@ from datetime import date, datetime
 
 sys.path.insert(0, ".")
 
-from app.core.sheet_sync import prepare_sheet_data, split_multi_value_cell, summarize_vendor_phone_issues
+from app.core.sheet_sync import (
+    prepare_sheet_data,
+    split_multi_value_cell,
+    summarize_vendor_phone_issues,
+    validate_catalog_snapshot,
+)
 from app.models.db import (
     SessionLocal,
     Product,
@@ -147,6 +152,7 @@ def sync_sheets_to_db(dry_run: bool = False):
         sys.exit(1)
 
     data = prepare_sheet_data(raw)
+    validate_catalog_snapshot(data)
 
     logger.info(
         "Loaded from Sheets: %d products, %d vendors, %d inventory, %d pricing, %d aliases",
@@ -210,8 +216,8 @@ def sync_sheets_to_db(dry_run: bool = False):
             obj.vendor_id = str(row.get("vendor_id", "")).strip() or None
             obj.brand = str(row.get("brand", "")).strip() or None
             obj.uom = str(row.get("uom", "")).strip() or None
-            obj.stock_qty = _coerce_int(row.get("stock_qty", 0))
-            obj.lead_time_days = _coerce_int(row.get("lead_time_days", 0))
+            obj.stock_qty = _coerce_int(row.get("stock_qty"), default=None)
+            obj.lead_time_days = _coerce_int(row.get("lead_time_days"), default=None)
         logger.info("Inventory: upserted %d rows", len(data["inventory"]))
 
         # ── pricing ──
@@ -277,7 +283,7 @@ def sync_sheets_to_db(dry_run: bool = False):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sync SocioMed Google Sheets data into the database.")
+    parser = argparse.ArgumentParser(description="Sync SocioMED Google Sheets data into the database.")
     parser.add_argument("--dry-run", action="store_true", help="Preview inserts/updates/deletes and roll them back.")
     args = parser.parse_args()
     sync_sheets_to_db(dry_run=args.dry_run)

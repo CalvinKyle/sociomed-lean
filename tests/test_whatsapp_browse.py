@@ -136,7 +136,7 @@ def test_returning_sender_with_expired_session_restarts_from_current_intent(monk
         )
     )
 
-    assert "Welcome to SocioMed" in sent_messages[0]
+    assert "Welcome to SocioMED" in sent_messages[0]
     assert saved_sessions["256700111111"]["state"] == ConversationState.MENU.value
 
 

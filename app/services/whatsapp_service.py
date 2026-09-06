@@ -4,6 +4,7 @@ from typing import Dict, Optional
 
 from rapidfuzz import fuzz
 
+from app.core.conversation_copy import conversation_message
 from app.core.currency import format_price, get_currency_for_phone
 from app.core.states import ConversationState
 from app.core.utils import get_session, has_seen_before, log_audit_event, save_session, send_whatsapp_message
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_LANGUAGES = {"en"}
 FUZZY_SELECTION_THRESHOLD = 82
 FUZZY_SELECTION_MARGIN = 8
+END_COMMANDS = frozenset({"end", "done", "close", "close session", "finish", "bye", "goodbye"})
 
 
 def _detect_language(sender: str, text: str) -> str:
@@ -95,97 +97,74 @@ def _unsupported_message_type(message: Dict) -> str:
 
 def _unsupported_message_reply(message: Dict) -> str:
     message_type = _unsupported_message_type(message)
-    return (
-        f"I received your {message_type}, but this procurement flow works best with typed text right now.\n\n"
-        "Please type your reply as text so I can keep helping you. You can also send 0 to return to the main menu."
-    )
+    return conversation_message("unsupported_message", message_type=message_type)
 
 
 def _main_menu() -> str:
-    return (
-        "Welcome to SocioMed.\n\n"
-        "What medical supply do you need today? You can type a product immediately.\n\n"
-        "1. Search products\n"
-        "2. Browse categories\n"
-        "3. Request a quotation\n"
-        "4. Talk to sales\n"
-        "0. Main menu"
-    )
+    return conversation_message("main_menu")
 
 
 def _help_message() -> str:
-    return (
-        "How SocioMed works:\n"
-        "1. Search a product such as surgical gloves or oxygen mask.\n"
-        "2. View featured offers when you want a quick shortlist.\n"
-        "3. Request a quotation and we notify the supplier or sales team.\n"
-        "4. Talk to sales for urgent or complex sourcing needs.\n"
-        "6. Browse by category when you want to scan product families first.\n\n"
-        "Use 0 at any time to return to the main menu."
-    )
+    return conversation_message("help")
 
 
 def _direct_rfq_prompt() -> str:
-    return (
-        "Reply with your RFQ in one message: your name, then item(s), quantity, facility, and delivery location.\n\n"
-        "Single item:\n"
-        "Dr. Ali | surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
-        "Bulk list:\n"
-        "Dr. Ali | gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala"
-    )
+    return conversation_message("direct_rfq_prompt")
 
 
 def _featured_offers_message(currency: str) -> str:
     offers = get_featured_catalog(limit=4)
     if not offers:
-        return "No featured offers are available right now. Reply 1 to search the catalog."
+        return conversation_message("no_featured_offers")
 
-    lines = ["Featured procurement offers:\n"]
+    lines = [conversation_message("featured_header")]
     for index, offer in enumerate(offers, start=1):
         starting_price = offer.get("starting_price")
         price_text = format_price(starting_price, currency) if starting_price is not None else "Price on request"
         uom = offer.get("uom") or "unit"
-        lines.append(
-            f"{index}. {offer['product_name']} - {offer['brand']} from {offer.get('vendor_name', 'Supplier')}\n"
-            f"From {price_text} per {uom} | Stock {offer.get('stock_qty', 0)} | Lead time {offer.get('lead_time_days', 'N/A')} days"
-        )
+        lines.append(conversation_message(
+            "featured_offer",
+            index=index,
+            product_name=offer["product_name"],
+            brand=offer["brand"],
+            vendor_name=offer.get("vendor_name", "Supplier"),
+            price_text=price_text,
+            uom=uom,
+            stock_qty=offer.get("stock_qty", 0),
+            lead_time_days=offer.get("lead_time_days", "N/A"),
+        ))
 
-    lines.append("\nReply with the product name you want to search, or reply 3 to request a quotation.")
+    lines.append(conversation_message("featured_footer"))
     return "\n\n".join(lines)
 
 
 def _browse_categories_message(categories: list[str]) -> str:
     if not categories:
-        return "No catalog categories are available right now. Reply 1 to search directly or 3 to request a quotation."
+        return conversation_message("no_categories")
 
-    lines = ["Browse procurement categories:\n"]
+    lines = [conversation_message("categories_header")]
     for index, category in enumerate(categories, start=1):
         lines.append(f"{index}. {category.title()}")
 
-    lines.append("\nReply with the category number or exact category name.")
-    lines.append("Use 0 at any time to return to the main menu.")
+    lines.append(conversation_message("categories_footer"))
     return "\n".join(lines)
 
 
 def _category_products_message(category_name: str, products: list[Dict], display_limit: int = 12) -> str:
     if not products:
-        return (
-            f"We do not have products listed in {category_name.title()} yet.\n"
-            "Reply with another category number, or use 0 to return to the main menu."
-        )
+        return conversation_message("category_empty", category_name=category_name.title())
 
     display_products = products[:display_limit]
-    lines = [f"{category_name.title()} products:\n"]
+    lines = [conversation_message("category_products_header", category_name=category_name.title())]
     for index, product in enumerate(display_products, start=1):
         lines.append(f"{index}. {product['name']}")
 
     if len(products) > display_limit:
         lines.append("")
-        lines.append("Type the exact product name if you do not see it in the numbered list.")
+        lines.append(conversation_message("category_products_overflow"))
 
     lines.append("")
-    lines.append("Reply with the product number you want to price first, or type the exact product name.")
-    lines.append("Use 0 at any time to return to the main menu.")
+    lines.append(conversation_message("category_products_footer"))
     return "\n".join(lines)
 
 
@@ -198,13 +177,25 @@ def _append_related_products(reply: str, product: Dict, currency: str) -> tuple[
     if not related_products:
         return reply, []
 
-    lines = [reply, "", "Complete this order with:"]
+    lines = [reply, "", conversation_message("related_header")]
     for index, related in enumerate(related_products, start=1):
         price = related.get("starting_price")
         price_text = format_price(price, currency) if price is not None else "Price on request"
-        lines.append(f"R{index}. {related['product_name']} from {price_text} per {related.get('uom') or 'unit'}")
-    lines.append("Reply with R1, R2, or R3 to view that related item.")
+        lines.append(conversation_message(
+            "related_offer",
+            index=index,
+            product_name=related["product_name"],
+            price_text=price_text,
+            uom=related.get("uom") or "unit",
+        ))
+    lines.append(conversation_message("related_footer"))
     return "\n".join(lines), related_products
+
+
+def is_end_command(text: str) -> bool:
+    """Recognize explicit session-close requests without using Twilio's STOP keyword."""
+    normalized = re.sub(r"\s+", " ", text.strip().casefold())
+    return normalized in END_COMMANDS
 
 
 def _resolve_category_selection(text: str, categories: list[str]) -> Optional[str]:
@@ -416,8 +407,23 @@ async def handle_incoming_message(message: Dict):
         current_state = ConversationState.MENU.value
     _log_user_input(sender, current_state, text)
 
+    if is_end_command(text):
+        _transition_session(sender, current_state, ConversationState.IDLE, ended_by="buyer")
+        log_audit_event(sender, "whatsapp_conversation_ended", {"previous_state": current_state})
+        try:
+            record_funnel_event(
+                "conversation_ended",
+                source="whatsapp",
+                actor_id=sender,
+                data={"previous_state": current_state, "ended_by": "buyer"},
+            )
+        except Exception as exc:
+            logger.warning("conversation_end_event_failed sender=%s error=%s", sender, exc)
+        await send_whatsapp_message(sender, conversation_message("conversation_closed"))
+        return
+
     if not validate_whatsapp_message(text):
-        await send_whatsapp_message(sender, "Please send a shorter message using normal text, numbers, and punctuation.")
+        await send_whatsapp_message(sender, conversation_message("message_too_long"))
         return
 
     if text_clean in ["0", "m", "menu", "back"]:
@@ -430,7 +436,7 @@ async def handle_incoming_message(message: Dict):
         ConversationState.MENU.value,
     }:
         if text_clean == "search":
-            await send_whatsapp_message(sender, "What medical supply are you looking for?")
+            await send_whatsapp_message(sender, conversation_message("search_prompt"))
             _transition_session(sender, current_state, ConversationState.SEARCHING)
         elif text_clean == "categories":
             categories = get_categories()
@@ -445,10 +451,7 @@ async def handle_incoming_message(message: Dict):
             await send_whatsapp_message(sender, _direct_rfq_prompt())
             _transition_session(sender, current_state, ConversationState.DIRECT_RFQ, formal_purchase=True)
         else:
-            await send_whatsapp_message(
-                sender,
-                "Reply with: name | organization | what you need. We will connect you with sales.",
-            )
+            await send_whatsapp_message(sender, conversation_message("sales_prompt_short"))
             _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
         return
 
@@ -463,11 +466,7 @@ async def handle_incoming_message(message: Dict):
         )
 
         if entry_intent.intent == BuyerIntent.RESTRICTED_MEDICINE:
-            await send_whatsapp_message(
-                sender,
-                "SocioMed handles medical supplies and equipment, not medicines. "
-                "Type the supply item you need, or reply SALES for help.",
-            )
+            await send_whatsapp_message(sender, conversation_message("restricted_medicine"))
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
@@ -478,7 +477,7 @@ async def handle_incoming_message(message: Dict):
             greeting = _main_menu()
             if profile:
                 first_name = profile["contact_name"].split()[0]
-                greeting = f"Welcome back, {first_name}.\n\n" + greeting
+                greeting = conversation_message("returning_greeting", first_name=first_name, menu=greeting)
             await send_whatsapp_message(sender, greeting)
             _transition_session(sender, current_state, ConversationState.MENU)
             return
@@ -486,11 +485,7 @@ async def handle_incoming_message(message: Dict):
         if entry_intent.intent == BuyerIntent.SALES or (
             entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "sales"
         ):
-            await send_whatsapp_message(
-                sender,
-                "Reply with: name | organization | what you need.\n"
-                "Example: Amina | City Care Hospital | Need 500 gloves urgently",
-            )
+            await send_whatsapp_message(sender, conversation_message("sales_prompt"))
             _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
             return
 
@@ -500,11 +495,12 @@ async def handle_incoming_message(message: Dict):
             profile = _load_buyer_profile(sender)
             prompt = _direct_rfq_prompt()
             if profile and profile.get("delivery_location"):
-                prompt = (
-                    f"Welcome back, {profile['contact_name'].split()[0]}. "
-                    f"Reply item | quantity to reuse {profile['organization']} and "
-                    f"{profile['delivery_location']}, or use the full format to change them.\n\n"
-                    + prompt
+                prompt = conversation_message(
+                    "returning_rfq",
+                    first_name=profile["contact_name"].split()[0],
+                    organization=profile["organization"],
+                    delivery_location=profile["delivery_location"],
+                    prompt=prompt,
                 )
             await send_whatsapp_message(sender, prompt)
             _transition_session(
@@ -550,25 +546,19 @@ async def handle_incoming_message(message: Dict):
                 "pending_uom": entry_intent.uom,
             }
         elif entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "search":
-            await send_whatsapp_message(sender, "What medical supply are you looking for?")
+            await send_whatsapp_message(sender, conversation_message("search_prompt"))
             _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
         else:
-            await send_whatsapp_message(
-                sender,
-                "Type a medical supply, QUOTE for a formal request, CATEGORIES to browse, "
-                "or SALES for help. Reply MENU to see all options.",
-            )
+            await send_whatsapp_message(sender, conversation_message("entry_fallback"))
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
     if current_state == ConversationState.SEARCHING.value:
         if is_bulk_request(text):
-            detail = (
-                "This looks like a multi-item sourcing list, so we should capture it as one RFQ for manual routing."
-            )
+            detail = conversation_message("bulk_detected")
             if is_complex_bulk_request(text):
-                detail = "This looks like a larger bulk sourcing list, so a SocioMed agent should triage it as one RFQ."
+                detail = conversation_message("bulk_complex")
             await send_whatsapp_message(
                 sender,
                 f"{detail}\n\n{_direct_rfq_prompt()}",
@@ -577,10 +567,7 @@ async def handle_incoming_message(message: Dict):
             return
 
         if not validate_product_query(text):
-            await send_whatsapp_message(
-                sender,
-                "Please enter a clear product search such as surgical gloves, IV set, or oxygen mask.",
-            )
+            await send_whatsapp_message(sender, conversation_message("search_invalid"))
             return
 
         data = get_cached_data()
@@ -620,12 +607,7 @@ async def handle_incoming_message(message: Dict):
                 actor_id=sender,
                 data={"query": text, "result_count": 0, "requires_disambiguation": False},
             )
-            await send_whatsapp_message(
-                sender,
-                "I could not find that exact product.\n\n"
-                "Reply SEARCH to try another term, QUOTE and SocioMed can source it, "
-                "or SALES for help.",
-            )
+            await send_whatsapp_message(sender, conversation_message("search_no_match"))
             _transition_session(sender, current_state, ConversationState.SEARCHING)
             return
 
@@ -642,17 +624,19 @@ async def handle_incoming_message(message: Dict):
             },
         )
         if not results:
-            await send_whatsapp_message(
-                sender,
-                "We do not have a live offer for that product right now. Reply 3 from the main menu to request a quotation anyway.",
-            )
+            await send_whatsapp_message(sender, conversation_message("search_no_live_offer_menu"))
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         reply, option_map = format_results(product["name"], results, currency=currency)
         pending_quantity = session.get("pending_quantity")
         if pending_quantity:
-            reply = f"Requested quantity: {pending_quantity} {session.get('pending_uom') or 'units'}.\n\n{reply}"
+            reply = conversation_message(
+                "requested_quantity",
+                quantity=pending_quantity,
+                uom=session.get("pending_uom") or "units",
+                results=reply,
+            )
         reply, related_products = _append_related_products(reply, product, currency)
         _transition_session(
             sender,
@@ -672,11 +656,7 @@ async def handle_incoming_message(message: Dict):
             _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
             return
         if text_clean in {"agent", "sales", "help"}:
-            await send_whatsapp_message(
-                sender,
-                "Reply with: name | organization | what you need.\n"
-                "We will connect you with sales.",
-            )
+            await send_whatsapp_message(sender, conversation_message("sales_handoff_prompt"))
             _transition_session(sender, current_state, ConversationState.TALK_TO_AGENT)
             return
 
@@ -686,10 +666,7 @@ async def handle_incoming_message(message: Dict):
             selected_index = -1
 
         if selected_index < 0 or selected_index >= len(search_matches):
-            await send_whatsapp_message(
-                sender,
-                "Please reply with one of the product numbers shown, RFQ for a manual quotation, or AGENT for sales.",
-            )
+            await send_whatsapp_message(sender, conversation_message("disambiguation_invalid"))
             return
 
         selected_product = search_matches[selected_index]
@@ -707,11 +684,7 @@ async def handle_incoming_message(message: Dict):
             },
         )
         if not results:
-            await send_whatsapp_message(
-                sender,
-                "We do not have a live offer for that product right now.\n"
-                "Reply RFQ to request a manual quotation, or AGENT for a sourcing handoff.",
-            )
+            await send_whatsapp_message(sender, conversation_message("search_no_live_offer_rfq"))
             return
 
         reply, option_map = format_results(selected_product["name"], results, currency=currency)
@@ -731,10 +704,7 @@ async def handle_incoming_message(message: Dict):
         categories = session.get("categories") or get_categories()
         selected_category = _resolve_category_selection(text_clean, categories)
         if not selected_category:
-            await send_whatsapp_message(
-                sender,
-                "Please reply with one of the category numbers shown, or type the exact category name.",
-            )
+            await send_whatsapp_message(sender, conversation_message("category_invalid"))
             return
 
         category_products = get_products_by_category(selected_category)
@@ -764,10 +734,7 @@ async def handle_incoming_message(message: Dict):
         displayed_products = session.get("category_products", [])
         selected_product = _resolve_category_product_selection(text, category_name, displayed_products)
         if not selected_product:
-            await send_whatsapp_message(
-                sender,
-                "Please reply with one of the product numbers shown, or type the exact product name from that category.",
-            )
+            await send_whatsapp_message(sender, conversation_message("category_product_invalid"))
             return
 
         data = get_cached_data()
@@ -783,11 +750,7 @@ async def handle_incoming_message(message: Dict):
             },
         )
         if not results:
-            await send_whatsapp_message(
-                sender,
-                "We do not have a live offer for that product right now.\n"
-                "Reply with another product number, type another product name, or use 3 from the main menu to request a quotation.",
-            )
+            await send_whatsapp_message(sender, conversation_message("category_no_live_offer"))
             return
 
         reply, option_map = format_results(selected_product["name"], results, currency=currency)
@@ -809,7 +772,7 @@ async def handle_incoming_message(message: Dict):
             related_products = session.get("related_products", [])
             related_index = int(related_match.group(1)) - 1
             if related_index < 0 or related_index >= len(related_products):
-                await send_whatsapp_message(sender, "That related item is not available. Reply with an offer number or 0 for menu.")
+                await send_whatsapp_message(sender, conversation_message("related_invalid"))
                 return
 
             selected_related = related_products[related_index]
@@ -819,7 +782,7 @@ async def handle_incoming_message(message: Dict):
             }
             selected_product = products_by_id.get(selected_related.get("product_id"))
             if not selected_product:
-                await send_whatsapp_message(sender, "That related item is no longer available. Reply 0 for the main menu.")
+                await send_whatsapp_message(sender, conversation_message("related_missing"))
                 return
 
             results = get_results(selected_product["product_id"], data, currency=currency)
@@ -834,7 +797,7 @@ async def handle_incoming_message(message: Dict):
                 },
             )
             if not results:
-                await send_whatsapp_message(sender, "We do not have a live offer for that related item right now.")
+                await send_whatsapp_message(sender, conversation_message("related_no_live_offer"))
                 return
 
             reply, option_map = format_results(selected_product["name"], results, currency=currency)
@@ -853,7 +816,7 @@ async def handle_incoming_message(message: Dict):
         try:
             option_num = int(text_clean)
         except ValueError:
-            await send_whatsapp_message(sender, "Reply with the offer number you want, or 0 for the main menu.")
+            await send_whatsapp_message(sender, conversation_message("offer_number_prompt"))
             return
 
         options = session.get("options", [])
@@ -870,27 +833,28 @@ async def handle_incoming_message(message: Dict):
             )
             await send_whatsapp_message(
                 sender,
-                f"You selected the {selected['brand']} option.\n"
-                f"{sku_line}"
-                f"UoM: {selected.get('uom', 'unit')}\n"
-                f"Minimum order: {selected.get('min_qty', 1)} {selected.get('uom', 'unit')}\n"
-                "Availability and delivery timing will be confirmed in the quotation.\n\n"
-                f"How many {selected.get('uom', 'unit')} do you need?",
+                conversation_message(
+                    "offer_selected",
+                    brand=selected["brand"],
+                    sku_line=sku_line,
+                    uom=selected.get("uom", "unit"),
+                    min_qty=selected.get("min_qty", 1),
+                ),
             )
             return
 
-        await send_whatsapp_message(sender, "That option is not available. Reply with one of the offer numbers shown.")
+        await send_whatsapp_message(sender, conversation_message("offer_invalid"))
         return
 
     if current_state == ConversationState.SELECTING_PRODUCT.value:
         try:
             quantity = int(text_clean)
         except ValueError:
-            await send_whatsapp_message(sender, "Please reply with a quantity as a whole number.")
+            await send_whatsapp_message(sender, conversation_message("quantity_integer"))
             return
 
         if not validate_quantity(quantity):
-            await send_whatsapp_message(sender, "Please reply with a quantity greater than zero.")
+            await send_whatsapp_message(sender, conversation_message("quantity_positive"))
             return
 
         selected = session.get("selected_item", {})
@@ -898,7 +862,11 @@ async def handle_incoming_message(message: Dict):
         if quantity < minimum_quantity:
             await send_whatsapp_message(
                 sender,
-                f"Minimum order for this offer is {minimum_quantity} {selected.get('uom', 'unit')}.",
+                conversation_message(
+                    "quantity_below_minimum",
+                    minimum_quantity=minimum_quantity,
+                    uom=selected.get("uom", "unit"),
+                ),
             )
             return
 
@@ -913,22 +881,17 @@ async def handle_incoming_message(message: Dict):
         )
         await send_whatsapp_message(
             sender,
-            f"Estimated starting price: {format_price(selected.get('default_price', 0), currency)} per {selected.get('uom', 'unit')}.\n\n"
-            "Reply with:\n"
-            "1. Request quotation\n"
-            "2. Talk to sales\n"
-            "3. Back to search results\n"
-            "0. Main menu",
+            conversation_message(
+                "price_menu",
+                price_text=format_price(selected.get("default_price", 0), currency),
+                uom=selected.get("uom", "unit"),
+            ),
         )
         return
 
     if current_state == ConversationState.VIEWING_PRICE.value:
         if text_clean == "1":
-            await send_whatsapp_message(
-                sender,
-                "Reply with your name, facility/client name, and delivery location.\n"
-                "Example: Dr. Ali, Mulago Hospital, Kampala",
-            )
+            await send_whatsapp_message(sender, conversation_message("rfq_contact_prompt"))
             _transition_session(
                 sender,
                 current_state,
@@ -939,11 +902,7 @@ async def handle_incoming_message(message: Dict):
             )
             return
         if text_clean == "2":
-            await send_whatsapp_message(
-                sender,
-                "Reply with: name | organization | what you need.\n"
-                "We will connect you with sales.",
-            )
+            await send_whatsapp_message(sender, conversation_message("sales_handoff_prompt"))
             _transition_session(
                 sender,
                 current_state,
@@ -960,10 +919,10 @@ async def handle_incoming_message(message: Dict):
                 product=session.get("product"),
                 options=session.get("options", []),
             )
-            await send_whatsapp_message(sender, "Returning to the supplier offers.")
+            await send_whatsapp_message(sender, conversation_message("returning_to_offers"))
             return
 
-        await send_whatsapp_message(sender, "Please reply with 1, 2, 3, or 0.")
+        await send_whatsapp_message(sender, conversation_message("price_menu_invalid"))
         return
 
     if current_state == ConversationState.RFQ_FLOW.value:
@@ -977,11 +936,7 @@ async def handle_incoming_message(message: Dict):
             or not validate_facility_name(organization)
             or not validate_delivery_location(delivery_location)
         ):
-            await send_whatsapp_message(
-                sender,
-                "Please reply with your name, facility/client name, and delivery location.\n"
-                "Example: Dr. Ali, Mulago Hospital, Kampala",
-            )
+            await send_whatsapp_message(sender, conversation_message("rfq_contact_prompt"))
             return
 
         try:
@@ -1012,16 +967,14 @@ async def handle_incoming_message(message: Dict):
             )
         except Exception as exc:
             log_audit_event(sender, "whatsapp_rfq_failed", {"error": str(exc)})
-            await send_whatsapp_message(sender, "We could not submit your quotation request right now. Please try again shortly.")
+            await send_whatsapp_message(sender, conversation_message("rfq_submit_error"))
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
-        supplier_text = "The supplier has been notified." if supplier_notified else "Our sales team will route it manually."
+        supplier_text = conversation_message("supplier_notified" if supplier_notified else "supplier_manual")
         await send_whatsapp_message(
             sender,
-            f"Quotation request received. RFQ #{rfq_id} has been created.\n"
-            f"{supplier_text}\n"
-            "A follow-up will be shared with you shortly.",
+            conversation_message("rfq_received", rfq_id=rfq_id, routing_message=supplier_text),
         )
         _transition_session(sender, current_state, ConversationState.MENU)
         return
@@ -1032,14 +985,7 @@ async def handle_incoming_message(message: Dict):
             buyer_profile=session.get("buyer_profile"),
         )
         if not rfq_payload:
-            await send_whatsapp_message(
-                sender,
-                "Please use one of these formats:\n\n"
-                "Single item:\n"
-                "Dr. Ali | surgical gloves | 10 | Mulago Hospital | Kampala\n\n"
-                "Bulk list:\n"
-                "Dr. Ali | gloves x10, catheters x5, IV sets x20 | Mulago Hospital | Kampala",
-            )
+            await send_whatsapp_message(sender, conversation_message("direct_rfq_invalid_format"))
             return
 
         if (
@@ -1048,10 +994,7 @@ async def handle_incoming_message(message: Dict):
             or not validate_facility_name(rfq_payload.organization)
             or not validate_delivery_location(rfq_payload.delivery_location)
         ):
-            await send_whatsapp_message(
-                sender,
-                "Please send a valid name, quantity, facility/client name, and delivery location.",
-            )
+            await send_whatsapp_message(sender, conversation_message("direct_rfq_invalid_data"))
             return
         try:
             rfq_id, _ = await _create_whatsapp_rfq(
@@ -1079,7 +1022,7 @@ async def handle_incoming_message(message: Dict):
             )
         except Exception as exc:
             log_audit_event(sender, "direct_whatsapp_rfq_failed", {"error": str(exc)})
-            await send_whatsapp_message(sender, "We could not capture your quotation request right now. Please try again.")
+            await send_whatsapp_message(sender, conversation_message("direct_rfq_submit_error"))
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
@@ -1091,16 +1034,14 @@ async def handle_incoming_message(message: Dict):
             )
             await send_whatsapp_message(
                 sender,
-                f"Your bulk quotation request has been logged as RFQ #{rfq_id}.\n"
-                "A SocioMed agent will triage the list, match suppliers, and follow up with options.",
+                conversation_message("bulk_rfq_received", rfq_id=rfq_id),
             )
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         await send_whatsapp_message(
             sender,
-            f"Your quotation request has been logged as RFQ #{rfq_id}.\n"
-            "Our team will match it to suppliers and follow up with you.",
+            conversation_message("direct_rfq_received", rfq_id=rfq_id),
         )
         _transition_session(sender, current_state, ConversationState.MENU)
         return
@@ -1110,15 +1051,15 @@ async def handle_incoming_message(message: Dict):
             lead_id = await _capture_sales_lead(sender, text, "whatsapp_sales_handoff")
         except Exception as exc:
             log_audit_event(sender, "sales_lead_failed", {"error": str(exc)})
-            await send_whatsapp_message(sender, "We could not hand this off to sales right now. Please try again shortly.")
+            await send_whatsapp_message(sender, conversation_message("sales_handoff_error"))
             _transition_session(sender, current_state, ConversationState.MENU)
             return
 
         await send_whatsapp_message(
             sender,
-            f"Your request has been shared with our sales team. Lead #{lead_id} is now open and someone will reach out shortly.",
+            conversation_message("sales_handoff_received", lead_id=lead_id),
         )
         _transition_session(sender, current_state, ConversationState.MENU)
         return
 
-    await send_whatsapp_message(sender, "I did not understand that. Reply 0 for the main menu.")
+    await send_whatsapp_message(sender, conversation_message("unknown_state"))

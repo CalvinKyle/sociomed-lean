@@ -1,6 +1,6 @@
 # WhatsApp Intent-First Buyer Flow
 
-This document defines the launch behavior for the SocioMed medical-supplies sales desk. It applies to both Twilio synchronous Sandbox processing and the optional Celery path because both invoke the same WhatsApp service.
+This document defines the launch behavior for the SocioMED medical-supplies sales desk. It applies to both Twilio synchronous Sandbox processing and the optional Celery path because both invoke the same WhatsApp service.
 
 ## Scope
 

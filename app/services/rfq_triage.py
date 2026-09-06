@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, Mapping, Optional
 
 from app.core.config import SMALL_RFQ_MAX_ITEMS
+from app.core.conversation_copy import conversation_message
 from app.services.search import find_products, get_results
 
 
@@ -182,16 +183,13 @@ def parse_direct_rfq_message(
 
 
 def format_ambiguous_match_message(matches: list[Dict]) -> str:
-    product_list = "\n".join(f"{index}. {product['name']}" for index, product in enumerate(matches, start=1))
+    product_list = "\n".join(
+        f"{index}. {product.get('search_display_name') or product['name']}"
+        for index, product in enumerate(matches, start=1)
+    )
     if len(matches) > BULK_MATCH_THRESHOLD:
-        next_step = (
-            "Reply with the product number to price one item first.\n"
-            "Reply RFQ if this is a bulk request, or AGENT for a sourcing handoff."
-        )
+        next_step = conversation_message("ambiguous_next_large")
     else:
-        next_step = (
-            "Reply with the product number you want to price first, "
-            "Reply RFQ for a manual quotation, or AGENT for sales."
-        )
+        next_step = conversation_message("ambiguous_next_small")
 
-    return f"I found multiple possible matches:\n{product_list}\n\n{next_step}"
+    return f"{conversation_message('ambiguous_header')}\n{product_list}\n\n{next_step}"

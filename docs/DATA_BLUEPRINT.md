@@ -1,10 +1,10 @@
-# SocioMed Data Blueprint
+# SocioMED Data Blueprint
 
 This is the refined translation of the co-founder clarifications into the current `sociomed-lean` repo.
 
 ## Confirmed Product Decision
 
-SocioMed is staying `RFQ-first`.
+SocioMED is staying `RFQ-first`.
 
 That means:
 
@@ -81,7 +81,7 @@ The `inventory` tab may also include this optional lowercase header:
 | --- | --- | --- |
 | `sku` | Internal inventory-level reference shared across vendor or brand rows for the same sellable item | `SM-GLOVE-NITRILE-M` |
 
-`sku` belongs on `inventory`, not `products`. The same internal SKU may appear across multiple inventory rows when different vendors or brands can satisfy the same internal reference. This lets SocioMed compare vendor offers while preserving one internal procurement reference.
+`sku` belongs on `inventory`, not `products`. The same internal SKU may appear across multiple inventory rows when different vendors or brands can satisfy the same internal reference. This lets SocioMED compare vendor offers while preserving one internal procurement reference.
 
 ## Alias Rules
 

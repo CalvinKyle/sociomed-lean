@@ -1,4 +1,4 @@
-# SocioMed Environments
+# SocioMED Environments
 
 This repo supports two safe environment patterns:
 

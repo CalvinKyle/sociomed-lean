@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from app.core.states import ConversationState
 from app.services import whatsapp_service
 
 
@@ -161,3 +162,51 @@ def test_first_message_medicine_request_is_rejected_safely(monkeypatch):
 
     assert "not medicines" in replies[-1]
     assert sessions["+256700111111"]["state"] == "MENU"
+
+
+@pytest.mark.parametrize("command", ["end", "END", "close session", "done", "goodbye"])
+def test_end_command_closes_session_from_any_state(monkeypatch, command):
+    sender = "+256700111111"
+    replies = []
+    sessions = {}
+    audit_events = []
+    funnel_events = []
+
+    async def fake_send(_to, message):
+        replies.append(message)
+        return True
+
+    monkeypatch.setattr(
+        whatsapp_service,
+        "get_session",
+        lambda _sender: {"state": ConversationState.SELECTING_PRODUCT.value, "selected_item": {"brand": "Test"}},
+    )
+    monkeypatch.setattr(whatsapp_service, "save_session", lambda user, value: sessions.update({user: value}))
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(whatsapp_service, "get_currency_for_phone", lambda _sender: "UGX")
+    monkeypatch.setattr(
+        whatsapp_service,
+        "log_audit_event",
+        lambda phone, event, data: audit_events.append((phone, event, data)),
+    )
+    monkeypatch.setattr(
+        whatsapp_service,
+        "record_funnel_event",
+        lambda event, **kwargs: funnel_events.append((event, kwargs)),
+    )
+
+    asyncio.run(
+        whatsapp_service.handle_incoming_message(
+            {"from": sender, "type": "text", "text": {"body": command}}
+        )
+    )
+
+    assert sessions[sender] == {"state": ConversationState.IDLE.value, "ended_by": "buyer"}
+    assert "session is now closed" in replies[-1]
+    assert audit_events[-1][1] == "whatsapp_conversation_ended"
+    assert funnel_events[-1][0] == "conversation_ended"
+
+
+def test_twilio_stop_keyword_is_not_reused_as_session_ender():
+    assert whatsapp_service.is_end_command("STOP") is False
+    assert "END" in whatsapp_service._main_menu()
