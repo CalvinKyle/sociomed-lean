@@ -37,6 +37,8 @@ Once deployed, these are the endpoints worth handing to your first design partne
   Receives signed Twilio delivery status callbacks.
 - `GET /api/health/twilio`
   Warms a free Render service and verifies the worker-free Sandbox configuration, schema, database, and Redis without exposing secrets.
+- `POST /api/admin/sync-sheets`
+  Runs the Google Sheets catalog sync immediately. Requires `X-API-Key` or a Bearer API key.
 - `POST /api/webhook`
   Retains support for incoming WhatsApp messages from Meta Cloud API.
 
@@ -87,13 +89,43 @@ These are the concrete setup sections you need to address next:
 4. Meta WhatsApp Cloud API
    When using Meta, set `VERIFY_TOKEN`, `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID`, and `WHATSAPP_APP_SECRET`.
 5. Google Sheets sync
-   Use `GOOGLE_CREDS_FILE=.secrets/google-service-account.json` locally or `GOOGLE_CREDS_JSON` in production, plus `SHEET_NAME=sociomed_db`.
+   Use `GOOGLE_CREDS_FILE=.secrets/google-service-account.json` locally or `GOOGLE_CREDS_JSON` in production, plus `SHEET_NAME=sociomed_db`. Set `SHEETS_AUTO_SYNC_ENABLED=true` to schedule recurring syncs and configure `SHEETS_AUTO_SYNC_INTERVAL_MINUTES` (default `60`).
 6. Database and Redis
    Set `DATABASE_URL`, `REDIS_URL`, `SESSION_TTL=3600`, `SESSION_VERSION=2`, `SMALL_RFQ_MAX_ITEMS=5`, and `CACHE_TTL_SECONDS=300`.
 7. Render deployment
    Free Sandbox mode needs only the web service, Key Value, and Postgres. The Docker start script applies Alembic migrations before starting a single Gunicorn worker.
 
 Use [.env.example](.env.example) for local machines and [.env.production.example](.env.production.example) for production values. The examples contain placeholders only; real credentials belong in `.env.local` or the Render Environment page.
+
+## Automatic Google Sheets Sync
+
+The FastAPI web process can periodically run the same validated, versioned sync
+used by `python3 sync_sheets_to_db.py`. It is disabled by default. To enable it
+on Render, configure:
+
+```text
+GOOGLE_CREDS_JSON=<complete service-account JSON stored as a Render secret>
+SHEET_NAME=sociomed_db
+SHEETS_AUTO_SYNC_ENABLED=true
+SHEETS_AUTO_SYNC_INTERVAL_MINUTES=60
+```
+
+Only one sync can run at a time. Scheduled ticks and authenticated manual
+requests share the same overlap guard. Successful and failed runs emit audit
+events with their duration and sync summary. Trigger an immediate run with:
+
+```bash
+curl -X POST \
+  -H "X-API-Key: $API_KEY" \
+  https://YOUR-SERVICE.onrender.com/api/admin/sync-sheets
+```
+
+Render free web services can spin down after approximately 15 minutes without
+traffic. While the service is asleep, its in-process scheduler is paused. An
+incoming request wakes the service, after which scheduling resumes; use the
+manual endpoint when an immediate post-wake sync is required. A continuously
+running Celery worker plus Celery beat can own this schedule later if paid
+worker infrastructure is added.
 
 ## Architecture
 

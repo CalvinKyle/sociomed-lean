@@ -55,6 +55,7 @@ from app.services.procurement import (
 )
 from app.services.pfi_generator import generate_pfi_pdf, resolve_pfi_number
 from app.services.tasks import process_whatsapp_message
+from app.services.sheets_auto_sync import run_sheets_sync
 from app.services.twilio_adapter import extract_twilio_message
 from app.services.whatsapp_processing import process_whatsapp_message_now
 from app.services.whatsapp_service import extract_message
@@ -196,6 +197,21 @@ async def health_check():
             "checks": checks,
         },
     )
+
+
+@router.post(
+    "/admin/sync-sheets",
+    dependencies=[Depends(require_api_key)],
+    tags=["admin"],
+)
+async def trigger_sheets_sync():
+    result = await run_sheets_sync(trigger="manual")
+    status_code = {
+        "completed": 200,
+        "skipped": 409,
+        "failed": 500,
+    }[result.status]
+    return JSONResponse(status_code=status_code, content=result.as_dict())
 
 
 @router.get("/catalog/featured", response_model=FeaturedCatalogResponse, tags=["go-to-market"])

@@ -6,6 +6,8 @@ from app.core import config as config_module
 
 
 def _reload_config(monkeypatch, **env):
+    # Real developer credentials in .env.local must not influence config tests.
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
     managed_keys = {
         "APP_ENV",
         "WHATSAPP_PROVIDER",
@@ -23,6 +25,8 @@ def _reload_config(monkeypatch, **env):
         "GOOGLE_CREDS_FILE",
         "GOOGLE_CREDS_JSON",
         "SHEET_NAME",
+        "SHEETS_AUTO_SYNC_ENABLED",
+        "SHEETS_AUTO_SYNC_INTERVAL_MINUTES",
         "DATABASE_URL",
         "REDIS_URL",
         "REDIS_HOST",
@@ -88,6 +92,23 @@ def test_async_whatsapp_processing_can_be_disabled_for_sandbox(monkeypatch):
     config = _reload_config(monkeypatch, ASYNC_WHATSAPP_PROCESSING="false")
 
     assert config.ASYNC_WHATSAPP_PROCESSING is False
+
+
+def test_sheets_auto_sync_defaults_to_disabled(monkeypatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.SHEETS_AUTO_SYNC_ENABLED is False
+    assert config.SHEETS_AUTO_SYNC_INTERVAL_MINUTES == 60
+
+
+def test_validate_config_rejects_non_positive_sheet_sync_interval(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        SHEETS_AUTO_SYNC_INTERVAL_MINUTES="0",
+    )
+
+    with pytest.raises(Exception, match="must be greater than zero"):
+        config.validate_config()
 
 
 def test_validate_config_allows_local_start_without_whatsapp_credentials(monkeypatch):
@@ -207,3 +228,25 @@ def test_validate_config_accepts_complete_twilio_production_settings(monkeypatch
 
     config.validate_config()
     assert config.ASYNC_WHATSAPP_PROCESSING is False
+
+
+def test_validate_config_requires_google_credentials_when_auto_sync_is_enabled(monkeypatch):
+    config = _reload_config(
+        monkeypatch,
+        APP_ENV="production",
+        WHATSAPP_PROVIDER="twilio",
+        DATABASE_URL="postgresql://db.example/sociomed",
+        REDIS_URL="redis://redis.example:6379/0",
+        PUBLIC_BASE_URL="https://sociomed-beta.onrender.com",
+        TWILIO_ACCOUNT_SID="AC123",
+        TWILIO_AUTH_TOKEN="auth-token",
+        TWILIO_WHATSAPP_FROM="whatsapp:+14155238886",
+        SHEETS_AUTO_SYNC_ENABLED="true",
+        GOOGLE_CREDS_JSON="",
+        GOOGLE_CREDS_FILE="/missing/service-account.json",
+    )
+
+    with pytest.raises(Exception) as exc:
+        config.validate_config()
+
+    assert "GOOGLE_CREDS_JSON_OR_FILE" in str(exc.value)

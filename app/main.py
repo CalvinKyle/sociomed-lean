@@ -7,9 +7,17 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.routes import router as api_router
 from app.core.auth import require_api_key
-from app.core.config import ENABLE_OPEN_DOCS, PUBLIC_BASE_URL, WHATSAPP_PROVIDER, validate_config
+from app.core.config import (
+    ENABLE_OPEN_DOCS,
+    PUBLIC_BASE_URL,
+    SHEETS_AUTO_SYNC_ENABLED,
+    SHEETS_AUTO_SYNC_INTERVAL_MINUTES,
+    WHATSAPP_PROVIDER,
+    validate_config,
+)
 from app.core.logging_config import setup_logging
 from app.core.rate_limit import limiter
+from app.services.sheets_auto_sync import start_sheets_sync_scheduler
 
 
 @asynccontextmanager
@@ -17,9 +25,16 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     setup_logging()
     validate_config()
+    scheduler = None
+    if SHEETS_AUTO_SYNC_ENABLED:
+        scheduler = start_sheets_sync_scheduler(SHEETS_AUTO_SYNC_INTERVAL_MINUTES)
+    app.state.sheets_sync_scheduler = scheduler
     print("🚀 SocioMED Lean procurement backend is now running!")
-    yield
-    # Optional: clean shutdown logic here later
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -59,6 +74,7 @@ async def root():
             "meta_whatsapp_webhook": "/api/webhook",
             "twilio_whatsapp_webhook": "/api/webhook/twilio",
             "twilio_delivery_status": "/api/webhook/twilio/status",
+            "manual_catalog_sync": "/api/admin/sync-sheets",
         },
         "docs": "/docs" if ENABLE_OPEN_DOCS else None,
         "public_base_url": PUBLIC_BASE_URL or None,

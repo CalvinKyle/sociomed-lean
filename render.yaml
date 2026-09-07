@@ -16,6 +16,10 @@ services:
         value: "1"
       - key: RUN_DB_MIGRATIONS
         value: "true"
+      - key: SHEETS_AUTO_SYNC_ENABLED
+        value: "false"
+      - key: SHEETS_AUTO_SYNC_INTERVAL_MINUTES
+        value: "60"
       - key: MIGRATION_MAX_ATTEMPTS
         value: "12"
       - key: WEB_CONCURRENCY
@@ -44,6 +48,10 @@ services:
         value: "false"
       - key: API_KEY
         generateValue: true
+      - key: GOOGLE_CREDS_JSON
+        sync: false
+      - key: SHEET_NAME
+        value: sociomed_db
       - key: DATABASE_URL
         fromDatabase:
           name: sociomed-postgres

@@ -44,6 +44,15 @@ TWILIO_STATUS_CALLBACK_URL = os.getenv("TWILIO_STATUS_CALLBACK_URL") or (
 GOOGLE_CREDS_FILE = os.getenv("GOOGLE_CREDS_FILE", ".secrets/google-service-account.json")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 SHEET_NAME = os.getenv("SHEET_NAME", "sociomed_db")
+SHEETS_AUTO_SYNC_ENABLED = os.getenv("SHEETS_AUTO_SYNC_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SHEETS_AUTO_SYNC_INTERVAL_MINUTES = int(
+    os.getenv("SHEETS_AUTO_SYNC_INTERVAL_MINUTES", "60")
+)
 
 # PostgreSQL — core database
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sociomed.db")
@@ -87,6 +96,9 @@ def validate_config():
         providers = ", ".join(sorted(SUPPORTED_WHATSAPP_PROVIDERS))
         raise Exception(f"WHATSAPP_PROVIDER must be one of: {providers}")
 
+    if SHEETS_AUTO_SYNC_INTERVAL_MINUTES <= 0:
+        raise Exception("SHEETS_AUTO_SYNC_INTERVAL_MINUTES must be greater than zero")
+
     missing = []
     required = {
         "DATABASE_URL": os.getenv("DATABASE_URL") if APP_ENV == "production" else DATABASE_URL,
@@ -102,6 +114,14 @@ def validate_config():
                 "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
             }
         )
+        if SHEETS_AUTO_SYNC_ENABLED:
+            required.update(
+                {
+                    "SHEET_NAME": SHEET_NAME,
+                    "GOOGLE_CREDS_JSON_OR_FILE": GOOGLE_CREDS_JSON
+                    or (GOOGLE_CREDS_FILE if os.path.isfile(GOOGLE_CREDS_FILE) else None),
+                }
+            )
         if WHATSAPP_PROVIDER == "twilio":
             required.update(
                 {
