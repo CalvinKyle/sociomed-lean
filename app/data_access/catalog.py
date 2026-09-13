@@ -42,7 +42,7 @@ def _get_catalog_data() -> Dict:
 
 
 def get_products() -> List[Dict]:
-    return list(_get_catalog_data().get("products", []))
+    return [product for product in _get_catalog_data().get("products", []) if product.get("active", True)]
 
 
 def canonical_category(product: Dict) -> str:

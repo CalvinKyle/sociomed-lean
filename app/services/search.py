@@ -168,7 +168,7 @@ def find_products(
     query_clean = _normalize_search_text(query)
     if not query_clean:
         return []
-    products_by_id = {product["product_id"]: product for product in products}
+    products_by_id = {product["product_id"]: product for product in products if product.get("active", True)}
     search_documents = (data or {}).get("search_documents") or _build_search_documents(
         products,
         aliases,
@@ -251,6 +251,9 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
         List of results with prices converted to buyer's currency
     """
     results = []
+    product = data.get("products_by_id", {}).get(product_id)
+    if product is not None and not product.get("active", True):
+        return results
     
     inventory_items = data.get("inventory_by_product", {}).get(product_id, [])
     

@@ -31,6 +31,7 @@ class Product(Base):
     clinical_speciality = Column(String)
     related_ids = Column(Text)
     product_family_id = Column(String)
+    active = Column(Boolean, default=True, server_default=text("true"), nullable=False)
     equipment_review_required = Column(Boolean, default=False, nullable=False)
 
 class Vendor(Base):

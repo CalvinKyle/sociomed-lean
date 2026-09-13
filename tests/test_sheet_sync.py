@@ -85,6 +85,29 @@ def _valid_snapshot():
     }
 
 
+def test_product_active_optional_and_hidden_from_search_and_browse(db, monkeypatch):
+    from app.data_access import catalog
+    from app.services.search import find_products
+
+    snapshot = _valid_snapshot()
+    sync_catalog_snapshot(db, snapshot)
+    assert db.get(Product, "p1").active is True
+    snapshot["products"][0]["active"] = "FALSE"
+    sync_catalog_snapshot(db, snapshot)
+    assert db.get(Product, "p1").active is False
+    data = {"products": [{"product_id": "p1", "name": "Suture", "category": "Consumables", "active": False}], "aliases": [{"product_id": "p1", "alias": "stitch"}]}
+    monkeypatch.setattr(catalog, "_get_catalog_data", lambda: data)
+    for query in ("Suture", "stitch"):
+        assert find_products(query, data["products"], data["aliases"]) == []
+    assert catalog.get_products() == []
+    assert catalog.get_categories() == []
+    assert catalog.get_subcategories_by_category("Consumables") == []
+    assert catalog.get_products_by_category("Consumables") == []
+    snapshot["products"][0]["active"] = ""
+    sync_catalog_snapshot(db, snapshot)
+    assert db.get(Product, "p1").active is True
+
+
 def test_repeat_sync_is_unchanged_and_creates_no_second_change_entries(db):
     first = sync_catalog_snapshot(db, _valid_snapshot())
     second_snapshot = _valid_snapshot()

@@ -154,6 +154,7 @@ def normalize_sheet_rows(rows: List[Dict], tab_name: str) -> List[Dict]:
             if normalized_key:
                 normalized[normalized_key] = normalize_cell_value(value)
         if tab_name == "products":
+            normalized["active"] = str(normalized.get("active", "")).strip().casefold() not in {"false", "0", "no", "off"}
             for multi_value_key in ("clinical_speciality", "related_ids"):
                 if multi_value_key in normalized:
                     normalized[multi_value_key] = normalize_multi_value_cell(normalized.get(multi_value_key))

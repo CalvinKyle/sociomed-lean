@@ -271,7 +271,7 @@ def _build_product_groups(products: list[Dict], data: Dict, currency: str) -> li
 
 
 def _enrich_search_matches(matches: list[Dict], data: Dict, currency: str) -> list[Dict]:
-    products = data.get("products", [])
+    products = [product for product in data.get("products", []) if product.get("active", True)]
     enriched = []
     for match in matches:
         family_key = _family_key(match)

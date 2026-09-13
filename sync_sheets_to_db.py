@@ -127,6 +127,7 @@ TAB_ENTITY_TYPES = {
 
 
 PRODUCT_FIELDS = {
+    "active": FieldSpec("active", lambda value: _coerce_bool(value, default=True), default=True),
     "name": FieldSpec("name", _coerce_text),
     "category": FieldSpec("category", _coerce_text),
     "clinical_speciality": FieldSpec("clinical_speciality", _coerce_text),
