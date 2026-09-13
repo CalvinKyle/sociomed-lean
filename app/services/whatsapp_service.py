@@ -227,6 +227,20 @@ def _prices_for_results(results: list[Dict]) -> list[int]:
     return prices
 
 
+def _offer_price_ranges(results: list[Dict], currency: str) -> str:
+    buckets = {}
+    for result in results:
+        uom = str(result.get("uom") or "unit").strip()
+        for tier in result.get("pricing") or [{"unit_price": result.get("default_price")}]:
+            if tier.get("unit_price") is not None:
+                key = (tier.get("currency") or result.get("currency") or currency, uom)
+                buckets.setdefault(key, []).append(tier["unit_price"])
+    return "\n".join(
+        f"{format_price_range(min(prices), max(prices), code)} / {uom}"
+        for (code, uom), prices in sorted(buckets.items())
+    ) or "Price on request"
+
+
 def _build_product_groups(products: list[Dict], data: Dict, currency: str) -> list[Dict]:
     grouped: dict[str, list[Dict]] = {}
     for product in products:
@@ -235,18 +249,14 @@ def _build_product_groups(products: list[Dict], data: Dict, currency: str) -> li
     groups = []
     for family_key, members in grouped.items():
         offer_count = 0
-        prices = []
+        family_results = []
         stock_qty = 0
         for product in members:
             results = get_results(product["product_id"], data, currency=currency)
             offer_count += len(results)
-            prices.extend(_prices_for_results(results))
+            family_results.extend(results)
             stock_qty += sum(max(0, result.get("stock_qty") or 0) for result in results)
-        price_text = (
-            format_price_range(min(prices), max(prices), currency)
-            if prices
-            else "Price on request"
-        )
+        price_text = _offer_price_ranges(family_results, currency)
         groups.append(
             {
                 "family_key": family_key,
@@ -361,12 +371,11 @@ def _build_variant_options(products: list[Dict], data: Dict, currency: str) -> l
     options = []
     for product in products:
         results = get_results(product["product_id"], data, currency=currency)
-        prices = _prices_for_results(results)
         options.append(
             {
                 **product,
                 "variant_label": _variant_label(product, data),
-                "price_text": format_price_range(min(prices), max(prices), currency) if prices else "Price on request",
+                "price_text": _offer_price_ranges(results, currency),
                 "offer_count": len(results),
             }
         )

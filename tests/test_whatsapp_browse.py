@@ -174,7 +174,9 @@ def test_product_list_groups_family_and_shows_price_range_and_offers():
     assert groups[0]["display_name"] == "PGA sutures"
     assert groups[0]["variant_count"] == 2
     assert groups[0]["offer_count"] == 2
-    assert "UGX 1,100 - UGX 1,500" in message
+    assert "UGX 1,100 - UGX 1,500" not in message
+    assert "UGX 1,100 - UGX 1,200 / Box of 100" in message
+    assert "UGX 1,500 / Box" in message
     assert message.count("PGA sutures") == 1
 
 
