@@ -6,7 +6,9 @@ class ConversationState(str, Enum):
     SEARCHING = "SEARCHING"
     SEARCH_DISAMBIGUATION = "SEARCH_DISAMBIGUATION"
     BROWSING_CATEGORIES = "BROWSING_CATEGORIES"
+    BROWSING_SUBCATEGORIES = "BROWSING_SUBCATEGORIES"
     CATEGORY_SELECTED = "CATEGORY_SELECTED"
+    FAMILY_SELECTED = "FAMILY_SELECTED"
     VIEWING_RESULTS = "VIEWING_RESULTS"
     SELECTING_PRODUCT = "SELECTING_PRODUCT"
     VIEWING_PRICE = "VIEWING_PRICE"
@@ -21,7 +23,9 @@ STATE_DESCRIPTIONS = {
     ConversationState.SEARCHING.value: "awaiting product search text",
     ConversationState.SEARCH_DISAMBIGUATION.value: "awaiting product selection after ambiguous search",
     ConversationState.BROWSING_CATEGORIES.value: "awaiting category selection",
+    ConversationState.BROWSING_SUBCATEGORIES.value: "awaiting specialty selection within a category",
     ConversationState.CATEGORY_SELECTED.value: "awaiting product selection within a category",
+    ConversationState.FAMILY_SELECTED.value: "awaiting a product variant within a family",
     ConversationState.VIEWING_RESULTS.value: "showing supplier offers",
     ConversationState.SELECTING_PRODUCT.value: "awaiting quantity for selected offer",
     ConversationState.VIEWING_PRICE.value: "awaiting next action after pricing view",

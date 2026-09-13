@@ -114,6 +114,92 @@ def test_fuzzy_category_and_product_selection(monkeypatch):
     assert whatsapp_service._resolve_category_selection("mask", ["face masks", "oxygen masks"]) is None
 
 
+def test_subcategory_pages_show_four_choices_and_navigation():
+    message, displayed, page = whatsapp_service._subcategory_page(
+        "Equipment",
+        ["Cardiology", "Laboratory", "Nephrology", "Radiology", "Surgery"],
+    )
+
+    assert displayed == ["Cardiology", "Laboratory", "Nephrology", "Radiology"]
+    assert page == 0
+    assert "5. Surgery" not in message
+    assert "NEXT for more" in message
+
+    next_message, next_displayed, next_page = whatsapp_service._subcategory_page(
+        "Equipment",
+        ["Cardiology", "Laboratory", "Nephrology", "Radiology", "Surgery"],
+        page=1,
+    )
+    assert next_displayed == ["Surgery"]
+    assert next_page == 1
+    assert "PREV to go back" in next_message
+
+
+def test_product_list_groups_family_and_shows_price_range_and_offers():
+    data = _sample_data()
+    data["products"] = [
+        {
+            "product_id": "p1",
+            "name": "Absorbable Braided PGA Suture",
+            "category": "Consumables",
+            "product_family_id": "SUTURE-PGA",
+        },
+        {
+            "product_id": "p2",
+            "name": "Absorbable Braided PGA Suture",
+            "category": "Consumables",
+            "product_family_id": "SUTURE-PGA",
+        },
+    ]
+    data["inventory_by_product"]["p2"] = [
+        {
+            "inventory_id": "i2",
+            "product_id": "p2",
+            "vendor_id": "v1",
+            "brand": "SafeTouch",
+            "sku": "SM-PGA-20-R",
+            "uom": "Box",
+            "stock_qty": 20,
+            "lead_time_days": 3,
+        }
+    ]
+    data["pricing_by_inventory"]["i2"] = [
+        {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 1, "max_qty": None, "unit_price": 1500}
+    ]
+
+    groups = whatsapp_service._build_product_groups(data["products"], data, "UGX")
+    message = whatsapp_service._category_products_message("Consumables", groups)
+
+    assert len(groups) == 1
+    assert groups[0]["display_name"] == "PGA sutures"
+    assert groups[0]["variant_count"] == 2
+    assert groups[0]["offer_count"] == 2
+    assert "UGX 1,100 - UGX 1,500" in message
+    assert message.count("PGA sutures") == 1
+
+
+def test_variant_list_prefers_attributes_and_accepts_sku_selection():
+    data = _sample_data()
+    product = {
+        "product_id": "p1",
+        "name": "Absorbable Braided PGA Suture",
+        "product_family_id": "SUTURE-PGA",
+    }
+    data["product_attributes"] = [
+        {"product_id": "p1", "attribute_code": "size", "value": "2/0", "unit": None},
+        {"product_id": "p1", "attribute_code": "needle", "value": "Round", "unit": None},
+    ]
+
+    variants = whatsapp_service._build_variant_options([product], data, "UGX")
+
+    assert variants[0]["variant_label"] == "2/0, Round"
+
+    data["product_attributes"] = []
+    data["inventory_by_product"]["p1"][0]["sku"] = "SM-GLOVE-001"
+    variants = whatsapp_service._build_variant_options([product], data, "UGX")
+    assert whatsapp_service._resolve_variant_selection("SM-GLOVE-001", variants) == variants[0]
+
+
 def test_returning_sender_with_expired_session_restarts_from_current_intent(monkeypatch):
     sent_messages = []
     saved_sessions = {}

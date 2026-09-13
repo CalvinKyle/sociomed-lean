@@ -1,6 +1,6 @@
 # SocioMED WhatsApp response copy
 
-This is the human-readable review deck for every static automatic response currently loaded from `app/content/conversation_copy.json`. It contains all 79 copy keys. Edit the JSON values—not the keys—in the source file; preserve every `{placeholder}` exactly.
+This is the human-readable review deck for every static automatic response currently loaded from `app/content/conversation_copy.json`. Edit the JSON values—not the keys—in the source file; preserve every `{placeholder}` exactly.
 
 ## Delivered-wordmark rule
 
@@ -200,6 +200,19 @@ Reply with the category number or exact category name.
 Use 0 at any time to return to the main menu.
 ```
 
+### Category subcategory header — `category_subcategories_header`
+
+```text
+{category_name}: choose a clinical area or product group:
+```
+
+### Category subcategory footer — `category_subcategories_footer`
+
+```text
+Reply with a number or the exact group name. {navigation}
+Use 0 at any time to return to the main menu.
+```
+
 ### Empty selected category — `category_empty`
 
 ```text
@@ -212,6 +225,12 @@ Reply with another category number, or use 0 to return to the main menu.
 ```text
 {category_name} products:
 
+```
+
+### Parent-product row — `category_product_group`
+
+```text
+{index}. {product_name} — {price_text} · {variant_count} variants · {offer_count} offers
 ```
 
 ### More products than the numbered list — `category_products_overflow`
@@ -227,16 +246,53 @@ Reply with the product number you want to price first, or type the exact product
 Use 0 at any time to return to the main menu.
 ```
 
+### Family-variant header — `family_variants_header`
+
+```text
+{product_name}: choose a specification:
+```
+
+### Family-variant row — `family_variant`
+
+```text
+{index}. {variant_name} — {price_text} · {offer_count} offers
+```
+
+### Family-variant overflow — `family_variants_overflow`
+
+```text
+Showing the first 12 specifications. Type the exact product name or SKU if yours is not shown.
+```
+
+### Family-variant footer — `family_variants_footer`
+
+```text
+Reply with the specification number you want to price.
+Use 0 at any time to return to the main menu.
+```
+
 ### Invalid category — `category_invalid`
 
 ```text
 Please reply with one of the category numbers shown, or type the exact category name.
 ```
 
+### Invalid subcategory — `subcategory_invalid`
+
+```text
+Please reply with one of the four group numbers shown, type the exact group name, or reply NEXT to see more.
+```
+
 ### Invalid product inside a category — `category_product_invalid`
 
 ```text
 Please reply with one of the product numbers shown, or type the exact product name from that category.
+```
+
+### Invalid family variant — `family_variant_invalid`
+
+```text
+Please reply with one of the specification numbers shown, or type the exact product name or SKU.
 ```
 
 ### Category product has no live offer — `category_no_live_offer`
@@ -299,6 +355,12 @@ Requested quantity: {quantity} {uom}.
 
 ```text
 I found multiple possible matches:
+```
+
+### Ambiguous parent-product row — `ambiguous_product_row`
+
+```text
+{index}. {product_name} — {price_text} · {variant_count} variants · {offer_count} offers
 ```
 
 ### Ambiguous large-list next step — `ambiguous_next_large`

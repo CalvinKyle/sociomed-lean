@@ -184,7 +184,14 @@ def parse_direct_rfq_message(
 
 def format_ambiguous_match_message(matches: list[Dict]) -> str:
     product_list = "\n".join(
-        f"{index}. {product.get('search_display_name') or product['name']}"
+        conversation_message(
+            "ambiguous_product_row",
+            index=index,
+            product_name=product.get("search_display_name") or product["name"],
+            price_text=product.get("price_text") or "Price on request",
+            variant_count=product.get("variant_count", 1),
+            offer_count=product.get("offer_count", 0),
+        )
         for index, product in enumerate(matches, start=1)
     )
     if len(matches) > BULK_MATCH_THRESHOLD:

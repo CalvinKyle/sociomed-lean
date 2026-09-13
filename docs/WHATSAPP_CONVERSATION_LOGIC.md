@@ -43,7 +43,8 @@ flowchart TD
 
     state -->|"new / MENU / IDLE"| menu
     menu -->|"product or product + quantity"| searching
-    menu -->|"category"| selected_category["CATEGORY_SELECTED"]
+    menu -->|"category with several groups"| subcategories["BROWSING_SUBCATEGORIES"]
+    menu -->|"category with one group"| selected_category["CATEGORY_SELECTED"]
     menu -->|"formal or multi-item purchase"| direct
     menu -->|"sales intent"| sales
     menu -->|"greeting"| menu
@@ -59,8 +60,13 @@ flowchart TD
     disambiguation -->|"RFQ"| direct
     disambiguation -->|"AGENT"| sales
 
-    categories -->|"category number or name"| selected_category
-    selected_category -->|"product number or exact name"| results
+    categories -->|"category with several groups"| subcategories
+    categories -->|"category with one group"| selected_category
+    subcategories -->|"clinical area / product group"| selected_category
+    subcategories -->|"NEXT / PREV"| subcategories
+    selected_category -->|"single product"| results
+    selected_category -->|"parent family"| family["FAMILY_SELECTED"]
+    family -->|"variant / specification"| results
 
     results -->|"offer number"| quantity["SELECTING_PRODUCT"]
     results -->|"R1 / R2 / R3"| results
@@ -82,8 +88,10 @@ flowchart TD
 | `IDLE` | Any new buyer message | Re-enters intent-first `MENU` behavior | Same as a new conversation |
 | `SEARCHING` | One product phrase, optionally with quantity | One match goes to `VIEWING_RESULTS`; several families go to `SEARCH_DISAMBIGUATION`; a list goes to `DIRECT_RFQ` | A missing match stays in search; a product without a validated price offers RFQ/sales routing |
 | `SEARCH_DISAMBIGUATION` | Product number, `RFQ`, or `AGENT` | Product number goes to offers; commands go to RFQ or sales | Repeats the numbered-choice instruction |
-| `BROWSING_CATEGORIES` | Category number or exact/fuzzy category name | `CATEGORY_SELECTED` | Repeats valid category-selection instructions |
-| `CATEGORY_SELECTED` | Product number or exact/fuzzy product name | `VIEWING_RESULTS` | Stays in the category if selection or live pricing is unavailable |
+| `BROWSING_CATEGORIES` | Category number or exact/fuzzy category name | `BROWSING_SUBCATEGORIES` when several clinical groups exist; otherwise `CATEGORY_SELECTED` | Repeats valid category-selection instructions |
+| `BROWSING_SUBCATEGORIES` | One of four visible group numbers, an exact/fuzzy group name, `NEXT`, or `PREV` | `CATEGORY_SELECTED`, or another four-group page | Repeats valid group-selection instructions |
+| `CATEGORY_SELECTED` | Parent-product number or exact/fuzzy product name | A multi-variant family goes to `FAMILY_SELECTED`; a single product goes to `VIEWING_RESULTS` | Stays in the category if selection or live pricing is unavailable |
+| `FAMILY_SELECTED` | Specification number, exact product name, or SKU | `VIEWING_RESULTS` | Repeats valid specification-selection instructions |
 | `VIEWING_RESULTS` | Supplier offer number or related product code `R1`–`R3` | Offer goes to `SELECTING_PRODUCT`; related product refreshes `VIEWING_RESULTS` | Repeats valid offer-selection instructions |
 | `SELECTING_PRODUCT` | Whole-number quantity meeting the minimum | `VIEWING_PRICE` | Explains integer, positive, or minimum-quantity requirement |
 | `VIEWING_PRICE` | `1`, `2`, `3`, or global `0` | Goes to `RFQ_FLOW`, `TALK_TO_AGENT`, `VIEWING_RESULTS`, or `MENU` | Repeats the four valid choices |

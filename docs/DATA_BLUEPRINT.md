@@ -48,6 +48,19 @@ These clarifications are now reflected directly in the repo:
    Offer summaries now show a real price range when quantity tiers exist.
 5. Vendor phone quality visibility
    The sync step now reports how many vendor numbers are valid, missing, or not in `+countrycode` format.
+6. Buyer-facing browse hierarchy
+   Category browsing merges `Device` and `Devices`, separates obvious reagent and instrument families, presents clinical or functional groups four at a time, and lists no more than 12 parent product families. Parent and variant rows include their validated price range and live offer count.
+7. Family-first variant selection
+   A buyer selects a parent family before an individual specification. Active `product_attributes` provide the specification label; until attributes are approved, the inventory SKU is shown so duplicate names are still distinguishable.
+
+The runtime category normalization is a transitional buyer-experience safeguard, not a replacement for governed catalog data. The durable hierarchy remains:
+
+1. One primary class: Equipment, Devices, Instruments, Consumables, Reagents, Furniture, or Accessories.
+2. One parent product family for buyer navigation.
+3. Many-to-many clinical specialties such as nephrology, cardiology, laboratory, radiology and imaging, surgery, or critical care.
+4. Sellable variant attributes such as size, gauge, needle profile, lumen count, material, and length.
+5. Brand, SKU, supplier, stock, and pricing at inventory/offer level.
+6. Equipment-to-reagent and equipment-to-accessory recommendations through ordered `related_ids`.
 
 ## Sheet Structure To Use Now
 

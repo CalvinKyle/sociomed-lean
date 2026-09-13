@@ -17,11 +17,15 @@ from app.core.validators import (
     validate_state,
     validate_whatsapp_message,
 )
-from app.data_access.catalog import get_categories, get_products_by_category
+from app.data_access.catalog import (
+    get_categories,
+    get_products_by_category,
+    get_subcategories_by_category,
+)
 from app.data_access.funnel import record_funnel_event
 from app.data_access.procurement import get_buyer_profile
 from app.models.db import SessionLocal
-from app.models.formatter import format_results
+from app.models.formatter import format_price_range, format_results
 from app.schemas.schemas import BuyerLeadCreate, RFQCreate
 from app.services.catalog import get_featured_catalog, get_related_catalog
 from app.services.procurement import (
@@ -36,7 +40,7 @@ from app.services.rfq_triage import (
     is_complex_bulk_request,
     parse_direct_rfq_message,
 )
-from app.services.search import find_products, get_results
+from app.services.search import FAMILY_DISPLAY_NAMES, find_products, get_results
 from app.services.procurement_policy import is_equipment_product
 from app.services.whatsapp_intent import BuyerIntent, classify_entry_intent
 from app.core.cache import get_cached_data
@@ -49,6 +53,8 @@ SUPPORTED_LANGUAGES = {"en"}
 FUZZY_SELECTION_THRESHOLD = 82
 FUZZY_SELECTION_MARGIN = 8
 END_COMMANDS = frozenset({"end", "done", "close", "close session", "finish", "bye", "goodbye"})
+SUBCATEGORY_PAGE_SIZE = 4
+PRODUCT_DISPLAY_LIMIT = 12
 
 
 def _detect_language(sender: str, text: str) -> str:
@@ -150,21 +156,244 @@ def _browse_categories_message(categories: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _category_products_message(category_name: str, products: list[Dict], display_limit: int = 12) -> str:
-    if not products:
+def _subcategory_page(
+    category_name: str,
+    subcategories: list[str],
+    page: int = 0,
+) -> tuple[str, list[str], int]:
+    max_page = max(0, (len(subcategories) - 1) // SUBCATEGORY_PAGE_SIZE)
+    page = min(max(page, 0), max_page)
+    start = page * SUBCATEGORY_PAGE_SIZE
+    displayed = subcategories[start:start + SUBCATEGORY_PAGE_SIZE]
+    lines = [
+        conversation_message(
+            "category_subcategories_header",
+            category_name=category_name.title(),
+        )
+    ]
+    for index, subcategory in enumerate(displayed, start=1):
+        lines.append(f"{index}. {subcategory}")
+
+    navigation = []
+    if page < max_page:
+        navigation.append("NEXT for more")
+    if page > 0:
+        navigation.append("PREV to go back")
+    lines.extend(
+        [
+            "",
+            conversation_message(
+                "category_subcategories_footer",
+                navigation=" | ".join(navigation),
+            ).strip(),
+        ]
+    )
+    return "\n".join(lines), displayed, page
+
+
+def _family_key(product: Dict) -> str:
+    return str(product.get("product_family_id") or product.get("product_id") or "").strip()
+
+
+def _humanize_family_id(family_id: str) -> str:
+    value = re.sub(r"-[A-F0-9]{6}$", "", family_id.upper())
+    value = re.sub(r"^(?:FAM-)?(?:SUB-|AUTO-)?", "", value)
+    words = value.replace("INSTR", "INSTRUMENTS").replace("CATH", "CATHETERS").split("-")
+    return " ".join(words).title()
+
+
+def _parent_product_name(products: list[Dict]) -> str:
+    first = products[0]
+    explicit_name = str(first.get("product_family_name") or "").strip()
+    if explicit_name:
+        return explicit_name
+    family_id = _family_key(first)
+    known_name = FAMILY_DISPLAY_NAMES.get(family_id.upper())
+    if known_name:
+        return known_name
+    if family_id and family_id != str(first.get("product_id") or ""):
+        return _humanize_family_id(family_id)
+    return str(first.get("name") or "Product").strip()
+
+
+def _prices_for_results(results: list[Dict]) -> list[int]:
+    prices = []
+    for result in results:
+        tiers = result.get("pricing") or []
+        if tiers:
+            prices.extend(tier["unit_price"] for tier in tiers if tier.get("unit_price") is not None)
+        elif result.get("default_price") is not None:
+            prices.append(result["default_price"])
+    return prices
+
+
+def _build_product_groups(products: list[Dict], data: Dict, currency: str) -> list[Dict]:
+    grouped: dict[str, list[Dict]] = {}
+    for product in products:
+        grouped.setdefault(_family_key(product), []).append(product)
+
+    groups = []
+    for family_key, members in grouped.items():
+        offer_count = 0
+        prices = []
+        stock_qty = 0
+        for product in members:
+            results = get_results(product["product_id"], data, currency=currency)
+            offer_count += len(results)
+            prices.extend(_prices_for_results(results))
+            stock_qty += sum(max(0, result.get("stock_qty") or 0) for result in results)
+        price_text = (
+            format_price_range(min(prices), max(prices), currency)
+            if prices
+            else "Price on request"
+        )
+        groups.append(
+            {
+                "family_key": family_key,
+                "display_name": _parent_product_name(members),
+                "product_ids": [product["product_id"] for product in members],
+                "variant_count": len(members),
+                "offer_count": offer_count,
+                "price_text": price_text,
+                "stock_qty": stock_qty,
+            }
+        )
+
+    return sorted(
+        groups,
+        key=lambda group: (
+            group["offer_count"] == 0,
+            -group["offer_count"],
+            -group["stock_qty"],
+            group["display_name"].casefold(),
+        ),
+    )
+
+
+def _enrich_search_matches(matches: list[Dict], data: Dict, currency: str) -> list[Dict]:
+    products = data.get("products", [])
+    enriched = []
+    for match in matches:
+        family_key = _family_key(match)
+        family_products = [product for product in products if _family_key(product) == family_key]
+        group = _build_product_groups(family_products or [match], data, currency)[0]
+        enriched.append(
+            {
+                **match,
+                "search_display_name": group["display_name"],
+                "family_product_ids": group["product_ids"],
+                "price_text": group["price_text"],
+                "offer_count": group["offer_count"],
+                "variant_count": group["variant_count"],
+            }
+        )
+    return enriched
+
+
+def _category_products_message(
+    category_name: str,
+    product_groups: list[Dict],
+    subcategory_name: str | None = None,
+    display_limit: int = PRODUCT_DISPLAY_LIMIT,
+) -> str:
+    if not product_groups:
         return conversation_message("category_empty", category_name=category_name.title())
 
-    display_products = products[:display_limit]
-    lines = [conversation_message("category_products_header", category_name=category_name.title())]
-    for index, product in enumerate(display_products, start=1):
-        lines.append(f"{index}. {product['name']}")
+    display_groups = product_groups[:display_limit]
+    heading = subcategory_name or category_name.title()
+    lines = [conversation_message("category_products_header", category_name=heading)]
+    for index, group in enumerate(display_groups, start=1):
+        lines.append(
+            conversation_message(
+                "category_product_group",
+                index=index,
+                product_name=group["display_name"],
+                price_text=group["price_text"],
+                variant_count=group["variant_count"],
+                offer_count=group["offer_count"],
+            )
+        )
 
-    if len(products) > display_limit:
+    if len(product_groups) > display_limit:
         lines.append("")
         lines.append(conversation_message("category_products_overflow"))
 
     lines.append("")
     lines.append(conversation_message("category_products_footer"))
+    return "\n".join(lines)
+
+
+def _variant_label(product: Dict, data: Dict) -> str:
+    attributes = [
+        row
+        for row in data.get("product_attributes", [])
+        if row.get("product_id") == product.get("product_id")
+    ]
+    if attributes:
+        attribute_priority = {
+            "size": 0,
+            "gauge": 1,
+            "needle_profile": 2,
+            "needle_type": 2,
+            "lumen": 3,
+            "lumens": 3,
+            "material": 4,
+            "length": 5,
+        }
+        attributes.sort(
+            key=lambda row: (
+                attribute_priority.get(str(row.get("attribute_code") or "").casefold(), 99),
+                str(row.get("attribute_code") or "").casefold(),
+            )
+        )
+        return ", ".join(
+            f"{str(row.get('value')).strip()}{(' ' + str(row.get('unit')).strip()) if row.get('unit') else ''}"
+            for row in attributes
+            if row.get("value") not in (None, "")
+        )
+
+    inventory = data.get("inventory_by_product", {}).get(product.get("product_id"), [])
+    sku = inventory[0].get("sku") if inventory else None
+    return f"{product.get('name', 'Variant')} · SKU {sku}" if sku else str(product.get("name") or "Variant")
+
+
+def _build_variant_options(products: list[Dict], data: Dict, currency: str) -> list[Dict]:
+    options = []
+    for product in products:
+        results = get_results(product["product_id"], data, currency=currency)
+        prices = _prices_for_results(results)
+        options.append(
+            {
+                **product,
+                "variant_label": _variant_label(product, data),
+                "price_text": format_price_range(min(prices), max(prices), currency) if prices else "Price on request",
+                "offer_count": len(results),
+            }
+        )
+    return sorted(
+        options,
+        key=lambda option: (
+            option["offer_count"] == 0,
+            option["variant_label"].casefold(),
+        ),
+    )
+
+
+def _family_variants_message(parent_name: str, variants: list[Dict]) -> str:
+    lines = [conversation_message("family_variants_header", product_name=parent_name)]
+    for index, variant in enumerate(variants[:PRODUCT_DISPLAY_LIMIT], start=1):
+        lines.append(
+            conversation_message(
+                "family_variant",
+                index=index,
+                variant_name=variant["variant_label"],
+                price_text=variant["price_text"],
+                offer_count=variant["offer_count"],
+            )
+        )
+    if len(variants) > PRODUCT_DISPLAY_LIMIT:
+        lines.extend(["", conversation_message("family_variants_overflow")])
+    lines.extend(["", conversation_message("family_variants_footer")])
     return "\n".join(lines)
 
 
@@ -225,7 +454,24 @@ def _resolve_category_selection(text: str, categories: list[str]) -> Optional[st
     return None
 
 
-def _resolve_category_product_selection(text: str, category_name: str, displayed_products: list[Dict]) -> Optional[Dict]:
+def _resolve_subcategory_selection(
+    text: str,
+    subcategories: list[str],
+    displayed_subcategories: list[str],
+) -> Optional[str]:
+    if text.isdigit():
+        index = int(text) - 1
+        return displayed_subcategories[index] if 0 <= index < len(displayed_subcategories) else None
+
+    return _resolve_category_selection(text, subcategories)
+
+
+def _resolve_category_product_selection(
+    text: str,
+    category_name: str,
+    displayed_products: list[Dict],
+    subcategory_name: str | None = None,
+) -> Optional[Dict]:
     if text.isdigit():
         index = int(text) - 1
         if 0 <= index < len(displayed_products):
@@ -233,7 +479,19 @@ def _resolve_category_product_selection(text: str, category_name: str, displayed
         return None
 
     normalized_text = text.strip().lower()
-    category_products = get_products_by_category(category_name)
+    category_products = (
+        get_products_by_category(category_name, subcategory_name)
+        if subcategory_name
+        else get_products_by_category(category_name)
+    )
+
+    displayed_matches = [
+        product
+        for product in displayed_products
+        if str(product.get("display_name") or product.get("name") or "").casefold() == normalized_text
+    ]
+    if len(displayed_matches) == 1:
+        return displayed_matches[0]
 
     exact_matches = [product for product in category_products if product["name"].lower() == normalized_text]
     if len(exact_matches) == 1:
@@ -251,6 +509,50 @@ def _resolve_category_product_selection(text: str, category_name: str, displayed
         if len(scored) == 1 or scored[0][0] - scored[1][0] >= FUZZY_SELECTION_MARGIN:
             return scored[0][1]
 
+    return None
+
+
+def _resolve_variant_selection(text: str, displayed_variants: list[Dict]) -> Optional[Dict]:
+    if text.isdigit():
+        index = int(text) - 1
+        displayed_count = min(len(displayed_variants), PRODUCT_DISPLAY_LIMIT)
+        return displayed_variants[index] if 0 <= index < displayed_count else None
+
+    normalized_text = text.strip().casefold()
+    exact = [
+        variant
+        for variant in displayed_variants
+        if normalized_text
+        in {
+            str(variant.get("name") or "").casefold(),
+            str(variant.get("variant_label") or "").casefold(),
+        }
+    ]
+    if len(exact) == 1:
+        return exact[0]
+
+    partial = [
+        variant
+        for variant in displayed_variants
+        if normalized_text
+        and normalized_text in str(variant.get("variant_label") or "").casefold()
+    ]
+    if len(partial) == 1:
+        return partial[0]
+
+    scored = sorted(
+        (
+            (
+                fuzz.WRatio(normalized_text, str(variant.get("variant_label") or "").casefold()),
+                variant,
+            )
+            for variant in displayed_variants
+        ),
+        key=lambda pair: -pair[0],
+    )
+    if scored and scored[0][0] >= FUZZY_SELECTION_THRESHOLD:
+        if len(scored) == 1 or scored[0][0] - scored[1][0] >= FUZZY_SELECTION_MARGIN:
+            return scored[0][1]
     return None
 
 
@@ -513,18 +815,37 @@ async def handle_incoming_message(message: Dict):
             return
 
         if entry_intent.intent == BuyerIntent.CATEGORY:
-            category_products = get_products_by_category(entry_intent.category)
-            await send_whatsapp_message(
-                sender,
-                _category_products_message(entry_intent.category, category_products),
-            )
-            _transition_session(
-                sender,
-                current_state,
-                ConversationState.CATEGORY_SELECTED,
-                category_name=entry_intent.category,
-                category_products=category_products[:12],
-            )
+            subcategories = get_subcategories_by_category(entry_intent.category)
+            if len(subcategories) > 1:
+                message, displayed_subcategories, page = _subcategory_page(
+                    entry_intent.category,
+                    subcategories,
+                )
+                await send_whatsapp_message(sender, message)
+                _transition_session(
+                    sender,
+                    current_state,
+                    ConversationState.BROWSING_SUBCATEGORIES,
+                    category_name=entry_intent.category,
+                    subcategories=subcategories,
+                    displayed_subcategories=displayed_subcategories,
+                    subcategory_page=page,
+                )
+            else:
+                data = get_cached_data()
+                category_products = get_products_by_category(entry_intent.category)
+                product_groups = _build_product_groups(category_products, data, currency)
+                await send_whatsapp_message(
+                    sender,
+                    _category_products_message(entry_intent.category, product_groups),
+                )
+                _transition_session(
+                    sender,
+                    current_state,
+                    ConversationState.CATEGORY_SELECTED,
+                    category_name=entry_intent.category,
+                    category_products=product_groups[:PRODUCT_DISPLAY_LIMIT],
+                )
             return
 
         if entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "categories":
@@ -571,7 +892,14 @@ async def handle_incoming_message(message: Dict):
             return
 
         data = get_cached_data()
-        product_matches = find_products(text, data.get("products", []), data.get("aliases", []), limit=5, data=data)
+        product_matches = find_products(
+            text,
+            data.get("products", []),
+            data.get("aliases", []),
+            limit=PRODUCT_DISPLAY_LIMIT,
+            data=data,
+        )
+        product_matches = _enrich_search_matches(product_matches, data, currency)
         record_funnel_event(
             "search",
             source="whatsapp",
@@ -609,6 +937,30 @@ async def handle_incoming_message(message: Dict):
             )
             await send_whatsapp_message(sender, conversation_message("search_no_match"))
             _transition_session(sender, current_state, ConversationState.SEARCHING)
+            return
+
+        family_product_ids = product.get("family_product_ids", [])
+        if len(family_product_ids) > 1:
+            products_by_id = data.get("products_by_id") or {
+                candidate["product_id"]: candidate for candidate in data.get("products", [])
+            }
+            family_products = [
+                products_by_id[product_id]
+                for product_id in family_product_ids
+                if product_id in products_by_id
+            ]
+            variants = _build_variant_options(family_products, data, currency)
+            await send_whatsapp_message(
+                sender,
+                _family_variants_message(product["search_display_name"], variants),
+            )
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.FAMILY_SELECTED,
+                family_name=product["search_display_name"],
+                family_variants=variants,
+            )
             return
 
         results = get_results(product["product_id"], data, currency=currency)
@@ -671,6 +1023,30 @@ async def handle_incoming_message(message: Dict):
 
         selected_product = search_matches[selected_index]
         data = get_cached_data()
+        family_product_ids = selected_product.get("family_product_ids", [])
+        if len(family_product_ids) > 1:
+            products_by_id = data.get("products_by_id") or {
+                candidate["product_id"]: candidate for candidate in data.get("products", [])
+            }
+            family_products = [
+                products_by_id[product_id]
+                for product_id in family_product_ids
+                if product_id in products_by_id
+            ]
+            variants = _build_variant_options(family_products, data, currency)
+            await send_whatsapp_message(
+                sender,
+                _family_variants_message(selected_product["search_display_name"], variants),
+            )
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.FAMILY_SELECTED,
+                family_name=selected_product["search_display_name"],
+                family_variants=variants,
+            )
+            return
+
         results = get_results(selected_product["product_id"], data, currency=currency)
         record_funnel_event(
             "results",
@@ -707,8 +1083,7 @@ async def handle_incoming_message(message: Dict):
             await send_whatsapp_message(sender, conversation_message("category_invalid"))
             return
 
-        category_products = get_products_by_category(selected_category)
-        displayed_products = category_products[:12]
+        subcategories = get_subcategories_by_category(selected_category)
         record_funnel_event(
             "results",
             source="whatsapp",
@@ -716,25 +1091,187 @@ async def handle_incoming_message(message: Dict):
             data={
                 "channel": "category_browse",
                 "category": selected_category,
-                "result_count": len(category_products),
+                "result_count": len(get_products_by_category(selected_category)),
             },
         )
-        await send_whatsapp_message(sender, _category_products_message(selected_category, category_products))
+        if len(subcategories) > 1:
+            message, displayed_subcategories, page = _subcategory_page(
+                selected_category,
+                subcategories,
+            )
+            await send_whatsapp_message(sender, message)
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.BROWSING_SUBCATEGORIES,
+                category_name=selected_category,
+                subcategories=subcategories,
+                displayed_subcategories=displayed_subcategories,
+                subcategory_page=page,
+            )
+        else:
+            data = get_cached_data()
+            category_products = get_products_by_category(selected_category)
+            product_groups = _build_product_groups(category_products, data, currency)
+            await send_whatsapp_message(
+                sender,
+                _category_products_message(selected_category, product_groups),
+            )
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.CATEGORY_SELECTED,
+                category_name=selected_category,
+                category_products=product_groups[:PRODUCT_DISPLAY_LIMIT],
+            )
+        return
+
+    if current_state == ConversationState.BROWSING_SUBCATEGORIES.value:
+        category_name = session.get("category_name", "")
+        subcategories = session.get("subcategories") or get_subcategories_by_category(category_name)
+        page = session.get("subcategory_page", 0)
+        if text_clean in {"next", "more"}:
+            message, displayed_subcategories, page = _subcategory_page(
+                category_name,
+                subcategories,
+                page + 1,
+            )
+            await send_whatsapp_message(sender, message)
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.BROWSING_SUBCATEGORIES,
+                category_name=category_name,
+                subcategories=subcategories,
+                displayed_subcategories=displayed_subcategories,
+                subcategory_page=page,
+            )
+            return
+        if text_clean in {"prev", "previous"}:
+            message, displayed_subcategories, page = _subcategory_page(
+                category_name,
+                subcategories,
+                page - 1,
+            )
+            await send_whatsapp_message(sender, message)
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.BROWSING_SUBCATEGORIES,
+                category_name=category_name,
+                subcategories=subcategories,
+                displayed_subcategories=displayed_subcategories,
+                subcategory_page=page,
+            )
+            return
+
+        displayed_subcategories = session.get("displayed_subcategories", [])
+        selected_subcategory = _resolve_subcategory_selection(
+            text_clean,
+            subcategories,
+            displayed_subcategories,
+        )
+        if not selected_subcategory:
+            await send_whatsapp_message(sender, conversation_message("subcategory_invalid"))
+            return
+
+        data = get_cached_data()
+        products = get_products_by_category(category_name, selected_subcategory)
+        product_groups = _build_product_groups(products, data, currency)
+        await send_whatsapp_message(
+            sender,
+            _category_products_message(
+                category_name,
+                product_groups,
+                subcategory_name=selected_subcategory,
+            ),
+        )
         _transition_session(
             sender,
             current_state,
             ConversationState.CATEGORY_SELECTED,
-            category_name=selected_category,
-            category_products=displayed_products,
+            category_name=category_name,
+            subcategory_name=selected_subcategory,
+            category_products=product_groups[:PRODUCT_DISPLAY_LIMIT],
         )
         return
 
     if current_state == ConversationState.CATEGORY_SELECTED.value:
         category_name = session.get("category_name", "")
+        subcategory_name = session.get("subcategory_name")
         displayed_products = session.get("category_products", [])
-        selected_product = _resolve_category_product_selection(text, category_name, displayed_products)
-        if not selected_product:
+        selected_group = _resolve_category_product_selection(
+            text,
+            category_name,
+            displayed_products,
+            subcategory_name,
+        )
+        if not selected_group:
             await send_whatsapp_message(sender, conversation_message("category_product_invalid"))
+            return
+
+        data = get_cached_data()
+        if selected_group.get("product_ids"):
+            products_by_id = data.get("products_by_id") or {
+                product["product_id"]: product for product in data.get("products", [])
+            }
+            family_products = [
+                products_by_id[product_id]
+                for product_id in selected_group["product_ids"]
+                if product_id in products_by_id
+            ]
+        else:
+            family_products = [selected_group]
+
+        if len(family_products) > 1:
+            variants = _build_variant_options(family_products, data, currency)
+            await send_whatsapp_message(
+                sender,
+                _family_variants_message(selected_group.get("display_name") or family_products[0]["name"], variants),
+            )
+            _transition_session(
+                sender,
+                current_state,
+                ConversationState.FAMILY_SELECTED,
+                family_name=selected_group.get("display_name") or family_products[0]["name"],
+                family_variants=variants,
+            )
+            return
+
+        selected_product = family_products[0]
+        results = get_results(selected_product["product_id"], data, currency=currency)
+        record_funnel_event(
+            "results",
+            source="whatsapp",
+            actor_id=sender,
+            data={
+                "channel": "category_browse",
+                "product_id": selected_product["product_id"],
+                "result_count": len(results),
+            },
+        )
+        if not results:
+            await send_whatsapp_message(sender, conversation_message("category_no_live_offer"))
+            return
+
+        reply, option_map = format_results(selected_product["name"], results, currency=currency)
+        reply, related_products = _append_related_products(reply, selected_product, currency)
+        _transition_session(
+            sender,
+            current_state,
+            ConversationState.VIEWING_RESULTS,
+            product=selected_product,
+            options=option_map,
+            related_products=related_products,
+        )
+        await send_whatsapp_message(sender, reply)
+        return
+
+    if current_state == ConversationState.FAMILY_SELECTED.value:
+        variants = session.get("family_variants", [])
+        selected_product = _resolve_variant_selection(text, variants)
+        if not selected_product:
+            await send_whatsapp_message(sender, conversation_message("family_variant_invalid"))
             return
 
         data = get_cached_data()
@@ -744,7 +1281,7 @@ async def handle_incoming_message(message: Dict):
             source="whatsapp",
             actor_id=sender,
             data={
-                "channel": "category_browse",
+                "channel": "family_browse",
                 "product_id": selected_product["product_id"],
                 "result_count": len(results),
             },
