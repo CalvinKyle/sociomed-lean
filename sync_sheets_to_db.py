@@ -184,6 +184,7 @@ INVENTORY_FIELDS = {
     ),
 }
 PRICING_FIELDS = {
+    "currency": FieldSpec("currency", lambda value: str(value or "UGX").strip().upper() or "UGX", default="UGX"),
     "inventory_id": FieldSpec("inventory_id", _coerce_text),
     "min_qty": FieldSpec("min_qty", lambda value: _coerce_int(value, default=0), default=0),
     "max_qty": FieldSpec("max_qty", lambda value: _coerce_int(value, default=None)),

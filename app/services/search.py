@@ -287,7 +287,7 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
         }
         
         # Convert prices to buyer's currency
-        result = convert_result_prices(result, currency)
+        result = convert_result_prices(result, currency, source_currency=first_tier.get("currency") or "UGX")
         
         results.append(result)
     

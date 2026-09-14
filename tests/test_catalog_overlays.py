@@ -47,3 +47,16 @@ def test_menu_tree_drives_category_specialty_family_and_pagination(monkeypatch):
     assert catalog.get_products_by_category("Clinical equipment", "Specialty 5") == data["products"]
     assert len(service._subcategory_page("Clinical equipment", specialties)[1]) == service.SUBCATEGORY_PAGE_SIZE
     assert service._subcategory_page("Clinical equipment", specialties, 1)[1] == ["Specialty 5"]
+
+
+def test_native_currency_conversion_in_search():
+    from app.core.exchange_rates import EXCHANGE_RATES, convert_price, convert_result_prices
+    from app.services.search import get_results
+    legacy = {"pricing": [{"unit_price": 1000, "min_qty": 1}], "default_price": 1000}
+    assert convert_result_prices(legacy, "UGX") == legacy
+    assert convert_price(1000, "KES") == round(1000 * EXCHANGE_RATES["KES"])
+    data = {"inventory_by_product": {"p": [{"inventory_id": "i", "vendor_id": "v", "uom": "unit"}]}, "vendors_by_id": {"v": {"vendor_id": "v"}}, "pricing_by_inventory": {"i": [{"unit_price": 100, "min_qty": 1, "currency": "KES"}]}}
+    assert get_results("p", data, "UGX")[0]["default_price"] == round(100 / EXCHANGE_RATES["KES"])
+    assert get_results("p", data, "UGX")[0]["pricing"][0]["currency"] == "UGX"
+    data["pricing_by_inventory"]["i"] = [{"unit_price": 1000, "min_qty": 1, "currency": "UGX"}]
+    assert get_results("p", data, "KES")[0]["default_price"] == round(1000 * EXCHANGE_RATES["KES"])

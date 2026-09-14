@@ -86,6 +86,7 @@ class Pricing(Base):
     max_qty = Column(Integer)
     unit_price = Column(Integer, nullable=False)
     price_valid_until = Column(Date)
+    currency = Column(String, default="UGX", server_default="UGX", nullable=False)
 
 class Alias(Base):
     __tablename__ = "aliases"

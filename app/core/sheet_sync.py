@@ -166,6 +166,8 @@ def normalize_sheet_rows(rows: List[Dict], tab_name: str) -> List[Dict]:
             normalized["phone"] = normalize_vendor_phone(normalized.get("phone", ""))
         if tab_name == "parent_products":
             normalized["family_id"] = normalized.get("product_family_id") or normalized.get("family_id")
+        if tab_name == "pricing":
+            normalized["currency"] = str(normalized.get("currency") or "UGX").strip().upper() or "UGX"
         normalized_rows.append(normalized)
     return normalized_rows
 

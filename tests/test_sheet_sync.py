@@ -143,6 +143,15 @@ def test_optional_menu_sync_roundtrip(db):
     assert result.summary["browse_menu"]["unchanged"] == 1
 
 
+def test_pricing_currency_defaults_and_syncs(db):
+    snapshot = _valid_snapshot()
+    sync_catalog_snapshot(db, snapshot)
+    assert db.get(Pricing, "pr1").currency == "UGX"
+    snapshot["pricing"][0]["currency"] = "kes"
+    sync_catalog_snapshot(db, prepare_sheet_data(snapshot))
+    assert db.get(Pricing, "pr1").currency == "KES"
+
+
 def test_repeat_sync_is_unchanged_and_creates_no_second_change_entries(db):
     first = sync_catalog_snapshot(db, _valid_snapshot())
     second_snapshot = _valid_snapshot()

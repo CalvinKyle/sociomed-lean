@@ -51,7 +51,7 @@ def exchange_rates_are_stale(as_of: date | None = None) -> bool:
     return (today - updated_at).days > MAX_EXCHANGE_RATE_AGE_DAYS
 
 
-def convert_price(amount_in_base: int, target_currency: str) -> int:
+def convert_price(amount_in_base: int, target_currency: str, source_currency: str = "UGX") -> int:
     """
     Convert a price from base currency (UGX) to target currency.
     
@@ -66,20 +66,24 @@ def convert_price(amount_in_base: int, target_currency: str) -> int:
         >>> convert_price(1000, "KES")  # 1000 UGX → ~29 KES
         29
     """
+    source_currency = str(source_currency or BASE_CURRENCY).strip().upper()
+    target_currency = str(target_currency or BASE_CURRENCY).strip().upper()
+    if source_currency not in EXCHANGE_RATES:
+        raise ValueError(f"Unsupported source currency: {source_currency}")
     if target_currency not in EXCHANGE_RATES:
         logger.warning(f"Currency {target_currency} not supported, using base currency {BASE_CURRENCY}")
-        return amount_in_base
+        target_currency = BASE_CURRENCY
     
-    if target_currency == BASE_CURRENCY:
+    if target_currency == source_currency:
         return amount_in_base
     
     rate = EXCHANGE_RATES[target_currency]
-    converted = int(round(amount_in_base * rate))
+    converted = int(round(amount_in_base / EXCHANGE_RATES[source_currency] * rate))
     
     return converted
 
 
-def convert_price_tier(tier: Dict, target_currency: str) -> Dict:
+def convert_price_tier(tier: Dict, target_currency: str, source_currency: str = "UGX") -> Dict:
     """
     Convert a single pricing tier to target currency.
     
@@ -92,11 +96,12 @@ def convert_price_tier(tier: Dict, target_currency: str) -> Dict:
     """
     return {
         **tier,
-        "unit_price": convert_price(tier["unit_price"], target_currency)
+        "unit_price": convert_price(tier["unit_price"], target_currency, source_currency),
+        **({"currency": target_currency if target_currency in EXCHANGE_RATES else BASE_CURRENCY} if "currency" in tier else {}),
     }
 
 
-def convert_result_prices(result: Dict, target_currency: str) -> Dict:
+def convert_result_prices(result: Dict, target_currency: str, source_currency: str = "UGX") -> Dict:
     """
     Convert all prices in a search result to target currency.
     
@@ -112,13 +117,13 @@ def convert_result_prices(result: Dict, target_currency: str) -> Dict:
     # Convert pricing tiers
     if "pricing" in result and result["pricing"]:
         converted_result["pricing"] = [
-            convert_price_tier(tier, target_currency) 
+            convert_price_tier(tier, target_currency, tier.get("currency") or source_currency)
             for tier in result["pricing"]
         ]
         # Update default_price from first converted tier
         converted_result["default_price"] = converted_result["pricing"][0]["unit_price"]
     
     elif "default_price" in result and result["default_price"]:
-        converted_result["default_price"] = convert_price(result["default_price"], target_currency)
+        converted_result["default_price"] = convert_price(result["default_price"], target_currency, source_currency)
     
     return converted_result
