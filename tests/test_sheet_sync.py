@@ -92,6 +92,12 @@ def test_product_active_optional_and_hidden_from_search_and_browse(db, monkeypat
     snapshot = _valid_snapshot()
     sync_catalog_snapshot(db, snapshot)
     assert db.get(Product, "p1").active is True
+
+
+def test_product_inactive_search_and_browse(db, monkeypatch):
+    from app.data_access import catalog
+    from app.services.search import find_products
+    snapshot = _valid_snapshot()
     snapshot["products"][0]["active"] = "FALSE"
     sync_catalog_snapshot(db, snapshot)
     assert db.get(Product, "p1").active is False
@@ -106,6 +112,21 @@ def test_product_active_optional_and_hidden_from_search_and_browse(db, monkeypat
     snapshot["products"][0]["active"] = ""
     sync_catalog_snapshot(db, snapshot)
     assert db.get(Product, "p1").active is True
+
+
+def test_optional_family_curation_sync_is_versioned(db):
+    from app.models.db import ProductFamilyCuration
+    snapshot = _valid_snapshot()
+    sync_catalog_snapshot(db, snapshot)
+    assert db.query(ProductFamilyCuration).count() == 0
+    snapshot["parent_products"] = [{"product_family_id": "SUTURE-PGA", "page": "2", "position": "1", "category_id": "consumables", "department": "Surgery"}]
+    sync_catalog_snapshot(db, snapshot)
+    row = db.get(ProductFamilyCuration, "SUTURE-PGA")
+    assert (row.page, row.position, row.department) == (2, 1, "Surgery")
+    stamp = row.updated_at
+    result = sync_catalog_snapshot(db, snapshot)
+    assert result.summary["parent_products"]["unchanged"] == 1
+    assert row.updated_at == stamp
 
 
 def test_repeat_sync_is_unchanged_and_creates_no_second_change_entries(db):

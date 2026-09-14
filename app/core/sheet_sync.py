@@ -37,6 +37,7 @@ REQUIRED_SHEET_COLUMNS = {
 }
 
 REQUIRED_ROW_VALUES = {
+    "parent_products": ("family_id",),
     "products": ("product_id", "name", "category"),
     "vendors": ("vendor_id", "name"),
     "inventory": ("inventory_id", "product_id", "vendor_id"),
@@ -69,6 +70,7 @@ REQUIRED_ROW_VALUES = {
     ),
 }
 PRIMARY_KEYS = {
+    "parent_products": "family_id",
     "products": "product_id",
     "vendors": "vendor_id",
     "inventory": "inventory_id",
@@ -160,6 +162,8 @@ def normalize_sheet_rows(rows: List[Dict], tab_name: str) -> List[Dict]:
                     normalized[multi_value_key] = normalize_multi_value_cell(normalized.get(multi_value_key))
         if tab_name == "vendors":
             normalized["phone"] = normalize_vendor_phone(normalized.get("phone", ""))
+        if tab_name == "parent_products":
+            normalized["family_id"] = normalized.get("product_family_id") or normalized.get("family_id")
         normalized_rows.append(normalized)
     return normalized_rows
 

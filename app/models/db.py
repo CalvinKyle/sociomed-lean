@@ -34,6 +34,16 @@ class Product(Base):
     active = Column(Boolean, default=True, server_default=text("true"), nullable=False)
     equipment_review_required = Column(Boolean, default=False, nullable=False)
 
+class ProductFamilyCuration(Base):
+    __tablename__ = "product_family_curation"
+    family_id = Column(String, primary_key=True)
+    page = Column(Integer)
+    position = Column(Integer)
+    category_id = Column(String)
+    department = Column(String)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), onupdate=lambda: datetime.now(UTC).replace(tzinfo=None))
+
+
 class Vendor(Base):
     __tablename__ = "vendors"
     vendor_id = Column(String, primary_key=True)
@@ -437,6 +447,7 @@ def load_data():
                     product["clinical_speciality"] = " | ".join(mapped_specialties)
 
         return {
+            "parent_products": [{c.name: getattr(row, c.name) for c in ProductFamilyCuration.__table__.columns} for row in db.query(ProductFamilyCuration).all()],
             "products": product_rows,
             "vendors": [{c.name: getattr(v, c.name) for c in Vendor.__table__.columns} for v in db.query(Vendor).all()],
             "inventory": [{c.name: getattr(i, c.name) for c in Inventory.__table__.columns} for i in db.query(Inventory).all()],

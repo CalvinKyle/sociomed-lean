@@ -24,3 +24,11 @@ def test_ranges_keep_currencies_separate():
     ], "UGX")
     assert len(text.splitlines()) == 2
     assert "KES" in text and "UGX" in text
+
+
+def test_curated_family_order_precedes_fallback(monkeypatch):
+    monkeypatch.setattr(service, "get_results", lambda *args, **kwargs: [])
+    products = [{"product_id": name, "name": name, "product_family_id": name} for name in ("a", "b", "c", "d")]
+    assert [g["family_key"] for g in service._build_product_groups(products, {}, "UGX")] == ["a", "b", "c", "d"]
+    data = {"parent_products": [{"family_id": "d", "page": 1, "position": 2}, {"family_id": "c", "page": 1, "position": 1}, {"family_id": "b", "page": 2, "position": 1}]}
+    assert [g["family_key"] for g in service._build_product_groups(products, data, "UGX")] == ["c", "d", "b", "a"]

@@ -269,9 +269,14 @@ def _build_product_groups(products: list[Dict], data: Dict, currency: str) -> li
             }
         )
 
+    curation = {row.get("family_id") or row.get("product_family_id"): row for row in data.get("parent_products", [])}
+    for group in groups:
+        row = curation.get(group["family_key"], {})
+        group["curation_order"] = (not bool(row), row.get("page") or 0, row.get("position") or 0)
     return sorted(
         groups,
         key=lambda group: (
+            *group["curation_order"],
             group["offer_count"] == 0,
             -group["offer_count"],
             -group["stock_qty"],

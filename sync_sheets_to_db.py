@@ -27,6 +27,7 @@ from app.core.sheet_sync import (
 from app.models.db import (
     SessionLocal,
     Product,
+    ProductFamilyCuration,
     Vendor,
     Inventory,
     Pricing,
@@ -139,6 +140,12 @@ PRODUCT_FIELDS = {
         default=False,
         preserve_blank=True,
     ),
+}
+CURATION_FIELDS = {
+    "page": FieldSpec("page", lambda value: _coerce_int(value, default=None)),
+    "position": FieldSpec("position", lambda value: _coerce_int(value, default=None)),
+    "category_id": FieldSpec("category_id", _coerce_text),
+    "department": FieldSpec("department", _coerce_text),
 }
 VENDOR_FIELDS = {
     "name": FieldSpec("name", _coerce_text),
@@ -843,6 +850,13 @@ def sync_catalog_snapshot(db, data: dict[str, list[dict]], dry_run: bool = False
         db.add(sync_version)
         db.flush()
         version_id = sync_version.version_id
+        summary.setdefault("parent_products", _blank_summary())
+        _sync_model_rows(
+            db, version_id=version_id, summary=summary,
+            tab_name="parent_products", entity_type="product_family_curation",
+            model_cls=ProductFamilyCuration, key_fields="family_id",
+            rows=filtered.get("parent_products", []), fields=CURATION_FIELDS,
+        )
 
         for issue in validation.skipped:
             summary.setdefault(issue.tab_name, _blank_summary())
