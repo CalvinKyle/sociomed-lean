@@ -120,6 +120,7 @@ def test_optional_family_curation_sync_is_versioned(db):
     sync_catalog_snapshot(db, snapshot)
     assert db.query(ProductFamilyCuration).count() == 0
     snapshot["parent_products"] = [{"product_family_id": "SUTURE-PGA", "page": "2", "position": "1", "category_id": "consumables", "department": "Surgery"}]
+    snapshot = prepare_sheet_data(snapshot)
     sync_catalog_snapshot(db, snapshot)
     row = db.get(ProductFamilyCuration, "SUTURE-PGA")
     assert (row.page, row.position, row.department) == (2, 1, "Surgery")
