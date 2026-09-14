@@ -831,7 +831,7 @@ async def handle_incoming_message(message: Dict):
 
         if entry_intent.intent == BuyerIntent.CATEGORY:
             subcategories = get_subcategories_by_category(entry_intent.category)
-            if len(subcategories) > 1:
+            if len(subcategories) > 1 or (subcategories and has_browse_menu()):
                 message, displayed_subcategories, page = _subcategory_page(
                     entry_intent.category,
                     subcategories,

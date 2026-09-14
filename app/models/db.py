@@ -461,7 +461,7 @@ def load_data():
                     product["clinical_speciality"] = " | ".join(mapped_specialties)
 
         return {
-            "parent_products": [{c.name: getattr(row, c.name) for c in ProductFamilyCuration.__table__.columns} for row in db.query(ProductFamilyCuration).all()],
+            "parent_products": [{c.name: (getattr(row, c.name).isoformat() if isinstance(getattr(row, c.name), datetime) else getattr(row, c.name)) for c in ProductFamilyCuration.__table__.columns} for row in db.query(ProductFamilyCuration).all()],
             "browse_menu": [{c.name: getattr(row, c.name) for c in BrowseMenuNode.__table__.columns} for row in db.query(BrowseMenuNode).all()],
             "products": product_rows,
             "vendors": [{c.name: getattr(v, c.name) for c in Vendor.__table__.columns} for v in db.query(Vendor).all()],

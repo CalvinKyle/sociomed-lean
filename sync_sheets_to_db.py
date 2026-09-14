@@ -112,6 +112,8 @@ class SyncRunResult:
 SUMMARY_FIELDS = ("unchanged", "changed", "created", "skipped_invalid")
 CORE_TABS = ("products", "vendors", "inventory", "pricing", "aliases")
 TAB_ENTITY_TYPES = {
+    "parent_products": "product_family_curation",
+    "browse_menu": "browse_menu_node",
     "products": "product",
     "vendors": "vendor",
     "inventory": "inventory",
