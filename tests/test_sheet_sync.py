@@ -130,6 +130,19 @@ def test_optional_family_curation_sync_is_versioned(db):
     assert row.updated_at == stamp
 
 
+def test_optional_menu_sync_roundtrip(db):
+    from app.models.db import BrowseMenuNode
+    snapshot = _valid_snapshot()
+    sync_catalog_snapshot(db, snapshot)
+    assert db.query(BrowseMenuNode).count() == 0
+    snapshot["browse_menu"] = [{"node_id": "c", "parent_node_id": "", "label": "Equipment", "node_type": "CATEGORY", "page": 1, "position": 2, "category_id": "EQ", "department": "", "next_action": "SPECIALTIES"}]
+    sync_catalog_snapshot(db, prepare_sheet_data(snapshot))
+    node = db.get(BrowseMenuNode, "c")
+    assert (node.label, node.category_id, node.next_action, node.position) == ("Equipment", "EQ", "SPECIALTIES", 2)
+    result = sync_catalog_snapshot(db, prepare_sheet_data(snapshot))
+    assert result.summary["browse_menu"]["unchanged"] == 1
+
+
 def test_repeat_sync_is_unchanged_and_creates_no_second_change_entries(db):
     first = sync_catalog_snapshot(db, _valid_snapshot())
     second_snapshot = _valid_snapshot()

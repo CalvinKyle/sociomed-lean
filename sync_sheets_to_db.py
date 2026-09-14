@@ -28,6 +28,7 @@ from app.models.db import (
     SessionLocal,
     Product,
     ProductFamilyCuration,
+    BrowseMenuNode,
     Vendor,
     Inventory,
     Pricing,
@@ -146,6 +147,10 @@ CURATION_FIELDS = {
     "position": FieldSpec("position", lambda value: _coerce_int(value, default=None)),
     "category_id": FieldSpec("category_id", _coerce_text),
     "department": FieldSpec("department", _coerce_text),
+}
+BROWSE_MENU_FIELDS = {
+    **{name: FieldSpec(name, _coerce_text) for name in ("parent_node_id", "label", "node_type", "category_id", "department", "next_action")},
+    **{name: FieldSpec(name, lambda value: _coerce_int(value, default=None)) for name in ("page", "position")},
 }
 VENDOR_FIELDS = {
     "name": FieldSpec("name", _coerce_text),
@@ -850,6 +855,13 @@ def sync_catalog_snapshot(db, data: dict[str, list[dict]], dry_run: bool = False
         db.add(sync_version)
         db.flush()
         version_id = sync_version.version_id
+        summary.setdefault("browse_menu", _blank_summary())
+        _sync_model_rows(
+            db, version_id=version_id, summary=summary,
+            tab_name="browse_menu", entity_type="browse_menu_node",
+            model_cls=BrowseMenuNode, key_fields="node_id",
+            rows=filtered.get("browse_menu", []), fields=BROWSE_MENU_FIELDS,
+        )
         summary.setdefault("parent_products", _blank_summary())
         _sync_model_rows(
             db, version_id=version_id, summary=summary,

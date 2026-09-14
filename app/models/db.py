@@ -44,6 +44,19 @@ class ProductFamilyCuration(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), onupdate=lambda: datetime.now(UTC).replace(tzinfo=None))
 
 
+class BrowseMenuNode(Base):
+    __tablename__ = "browse_menu_node"
+    node_id = Column(String, primary_key=True)
+    parent_node_id = Column(String)
+    label = Column(String)
+    node_type = Column(String)
+    page = Column(Integer)
+    position = Column(Integer)
+    category_id = Column(String)
+    department = Column(String)
+    next_action = Column(String)
+
+
 class Vendor(Base):
     __tablename__ = "vendors"
     vendor_id = Column(String, primary_key=True)
@@ -448,6 +461,7 @@ def load_data():
 
         return {
             "parent_products": [{c.name: getattr(row, c.name) for c in ProductFamilyCuration.__table__.columns} for row in db.query(ProductFamilyCuration).all()],
+            "browse_menu": [{c.name: getattr(row, c.name) for c in BrowseMenuNode.__table__.columns} for row in db.query(BrowseMenuNode).all()],
             "products": product_rows,
             "vendors": [{c.name: getattr(v, c.name) for c in Vendor.__table__.columns} for v in db.query(Vendor).all()],
             "inventory": [{c.name: getattr(i, c.name) for c in Inventory.__table__.columns} for i in db.query(Inventory).all()],

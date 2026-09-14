@@ -17,6 +17,7 @@ client = gspread.authorize(creds)
 sheet = client.open(SHEET_NAME)
 
 OPTIONAL_TAXONOMY_TABS = (
+    "browse_menu",
     "parent_products",
     "taxonomy_versions",
     "product_classes",

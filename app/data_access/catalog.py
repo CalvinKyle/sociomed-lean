@@ -64,6 +64,8 @@ def canonical_category(product: Dict) -> str:
 
 
 def get_categories() -> List[str]:
+    if has_browse_menu():
+        return [row["label"] for row in _menu_nodes("CATEGORY")]
     categories = {
         canonical_category(product)
         for product in get_products()
@@ -91,6 +93,9 @@ def product_specialties(product: Dict) -> List[str]:
 
 
 def get_subcategories_by_category(category: str) -> List[str]:
+    if has_browse_menu():
+        parent = _category_node(category)
+        return [row["label"] for row in _menu_nodes("SPECIALTY") if parent and row.get("parent_node_id") == parent["node_id"]]
     counts: Dict[str, int] = {}
     for product in get_products_by_category(category):
         for specialty in product_specialties(product):
@@ -110,6 +115,19 @@ def get_subcategories_by_category(category: str) -> List[str]:
 
 
 def get_products_by_category(category: str, subcategory: str | None = None) -> List[Dict]:
+    if has_browse_menu():
+        node = _category_node(category)
+        if subcategory and node:
+            node = next((row for row in _menu_nodes("SPECIALTY") if row.get("parent_node_id") == node["node_id"] and row.get("label", "").casefold() == subcategory.strip().casefold()), None)
+        if not node:
+            return []
+        curation = {row.get("family_id") or row.get("product_family_id"): row for row in _get_catalog_data().get("parent_products", [])}
+        def matches(product):
+            placement = curation.get(product.get("product_family_id"), product)
+            category_id = placement.get("category_id") or product.get("category_id") or product.get("category")
+            departments = split_multi_value_cell(placement.get("department") or product.get("clinical_speciality"))
+            return (not node.get("category_id") or str(category_id or "").casefold() == str(node["category_id"]).casefold()) and (not node.get("department") or str(node["department"]).casefold() in [value.casefold() for value in departments])
+        return sorted([product for product in get_products() if matches(product)], key=lambda product: str(product.get("name", "")).casefold())
     category_clean = str(category or "").strip().casefold()
     subcategory_clean = str(subcategory or "").strip().casefold()
     products = [
@@ -135,3 +153,18 @@ def get_config() -> Dict[str, str | bool]:
         "support_email": SUPPORT_EMAIL,
         "open_docs_enabled": ENABLE_OPEN_DOCS,
     }
+
+
+def has_browse_menu() -> bool:
+    return bool(_get_catalog_data().get("browse_menu"))
+
+
+def _menu_nodes(node_type: str) -> List[Dict]:
+    return sorted(
+        [row for row in _get_catalog_data().get("browse_menu", []) if str(row.get("node_type", "")).upper() == node_type],
+        key=lambda row: (row.get("page") or 0, row.get("position") or 0, row.get("node_id", "")),
+    )
+
+
+def _category_node(category: str):
+    return next((row for row in _menu_nodes("CATEGORY") if str(row.get("label", "")).casefold() == category.strip().casefold()), None)

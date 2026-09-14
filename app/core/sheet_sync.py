@@ -37,6 +37,7 @@ REQUIRED_SHEET_COLUMNS = {
 }
 
 REQUIRED_ROW_VALUES = {
+    "browse_menu": ("node_id",),
     "parent_products": ("family_id",),
     "products": ("product_id", "name", "category"),
     "vendors": ("vendor_id", "name"),
@@ -70,6 +71,7 @@ REQUIRED_ROW_VALUES = {
     ),
 }
 PRIMARY_KEYS = {
+    "browse_menu": "node_id",
     "parent_products": "family_id",
     "products": "product_id",
     "vendors": "vendor_id",

@@ -21,6 +21,7 @@ from app.data_access.catalog import (
     get_categories,
     get_products_by_category,
     get_subcategories_by_category,
+    has_browse_menu,
 )
 from app.data_access.funnel import record_funnel_event
 from app.data_access.procurement import get_buyer_profile
@@ -1108,7 +1109,7 @@ async def handle_incoming_message(message: Dict):
                 "result_count": len(get_products_by_category(selected_category)),
             },
         )
-        if len(subcategories) > 1:
+        if len(subcategories) > 1 or (subcategories and has_browse_menu()):
             message, displayed_subcategories, page = _subcategory_page(
                 selected_category,
                 subcategories,
