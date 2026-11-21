@@ -25,8 +25,11 @@ def test_format_results_returns_selectable_offer_options():
 
     message, option_map = format_results("Surgical Gloves", results, currency="UGX")
 
-    assert "Available Supplier Offers" in message
+    assert "Available Options" in message
     assert "SafeTouch" in message
+    assert "MedSource" not in message
+    assert "Stock: 200" not in message
+    assert "Availability: Available" in message
     assert "SKU: SM-GLOVE-001" in message
     assert "UoM: Box of 100" in message
     assert "UGX 1,100 - UGX 1,200" in message

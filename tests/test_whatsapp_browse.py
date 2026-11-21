@@ -27,8 +27,8 @@ def _sample_data():
             }
         ],
         "pricing": [
-            {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200},
-            {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100},
+            {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200, "price_status": "verified"},
+            {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100, "price_status": "verified"},
         ],
         "vendors": [
             {"vendor_id": "v1", "name": "MedSource", "phone": "+256700111111"},
@@ -51,8 +51,8 @@ def _sample_data():
         },
         "pricing_by_inventory": {
             "i1": [
-                {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200},
-                {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100},
+                {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200, "price_status": "verified"},
+                {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100, "price_status": "verified"},
             ],
         },
     }
@@ -81,7 +81,7 @@ def test_whatsapp_category_browse_flows_into_offer_selection(monkeypatch):
 
     sender = "256700111111"
 
-    asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "6"}}))
+    asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "2"}}))
     assert "Browse procurement categories" in sent_messages[-1]
     assert session_store[sender]["state"] == ConversationState.BROWSING_CATEGORIES.value
 
@@ -90,7 +90,7 @@ def test_whatsapp_category_browse_flows_into_offer_selection(monkeypatch):
     assert session_store[sender]["state"] == ConversationState.CATEGORY_SELECTED.value
 
     asyncio.run(whatsapp_service.handle_incoming_message({"from": sender, "text": {"body": "1"}}))
-    assert "Available Supplier Offers" in sent_messages[-1]
+    assert "Available Options" in sent_messages[-1]
     assert session_store[sender]["state"] == ConversationState.VIEWING_RESULTS.value
     assert session_store[sender]["product"]["product_id"] == "p1"
 
@@ -114,7 +114,95 @@ def test_fuzzy_category_and_product_selection(monkeypatch):
     assert whatsapp_service._resolve_category_selection("mask", ["face masks", "oxygen masks"]) is None
 
 
-def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch):
+def test_subcategory_pages_show_four_choices_and_navigation():
+    message, displayed, page = whatsapp_service._subcategory_page(
+        "Equipment",
+        ["Cardiology", "Laboratory", "Nephrology", "Radiology", "Surgery"],
+    )
+
+    assert displayed == ["Cardiology", "Laboratory", "Nephrology", "Radiology"]
+    assert page == 0
+    assert "5. Surgery" not in message
+    assert "NEXT for more" in message
+
+    next_message, next_displayed, next_page = whatsapp_service._subcategory_page(
+        "Equipment",
+        ["Cardiology", "Laboratory", "Nephrology", "Radiology", "Surgery"],
+        page=1,
+    )
+    assert next_displayed == ["Surgery"]
+    assert next_page == 1
+    assert "PREV to go back" in next_message
+
+
+def test_product_list_groups_family_and_shows_price_range_and_offers():
+    data = _sample_data()
+    data["products"] = [
+        {
+            "product_id": "p1",
+            "name": "Absorbable Braided PGA Suture",
+            "category": "Consumables",
+            "product_family_id": "SUTURE-PGA",
+        },
+        {
+            "product_id": "p2",
+            "name": "Absorbable Braided PGA Suture",
+            "category": "Consumables",
+            "product_family_id": "SUTURE-PGA",
+        },
+    ]
+    data["inventory_by_product"]["p2"] = [
+        {
+            "inventory_id": "i2",
+            "product_id": "p2",
+            "vendor_id": "v1",
+            "brand": "SafeTouch",
+            "sku": "SM-PGA-20-R",
+            "uom": "Box",
+            "stock_qty": 20,
+            "lead_time_days": 3,
+        }
+    ]
+    data["pricing_by_inventory"]["i2"] = [
+        {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 1, "max_qty": None, "unit_price": 1500, "price_status": "verified"}
+    ]
+
+    groups = whatsapp_service._build_product_groups(data["products"], data, "UGX")
+    message = whatsapp_service._category_products_message("Consumables", groups)
+
+    assert len(groups) == 1
+    assert groups[0]["display_name"] == "PGA sutures"
+    assert groups[0]["variant_count"] == 2
+    assert groups[0]["offer_count"] == 2
+    assert "UGX 1,100 - UGX 1,500" not in message
+    assert "UGX 1,100 - UGX 1,200 / Box of 100" in message
+    assert "UGX 1,500 / Box" in message
+    assert message.count("PGA sutures") == 1
+
+
+def test_variant_list_prefers_attributes_and_accepts_sku_selection():
+    data = _sample_data()
+    product = {
+        "product_id": "p1",
+        "name": "Absorbable Braided PGA Suture",
+        "product_family_id": "SUTURE-PGA",
+    }
+    data["product_attributes"] = [
+        {"product_id": "p1", "attribute_code": "size", "value": "2/0", "unit": None},
+        {"product_id": "p1", "attribute_code": "needle", "value": "Round", "unit": None},
+    ]
+
+    variants = whatsapp_service._build_variant_options([product], data, "UGX")
+
+    assert variants[0]["variant_label"] == "2/0, Round"
+
+    data["product_attributes"] = []
+    data["inventory_by_product"]["p1"][0]["sku"] = "SM-GLOVE-001"
+    variants = whatsapp_service._build_variant_options([product], data, "UGX")
+    assert whatsapp_service._resolve_variant_selection("SM-GLOVE-001", variants) == variants[0]
+
+
+def test_returning_sender_with_expired_session_restarts_from_current_intent(monkeypatch):
     sent_messages = []
     saved_sessions = {}
 
@@ -126,6 +214,9 @@ def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch)
     monkeypatch.setattr(whatsapp_service, "has_seen_before", lambda _user: True)
     monkeypatch.setattr(whatsapp_service, "save_session", lambda user, data: saved_sessions.update({user: data}))
     monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", fake_send)
+    monkeypatch.setattr(whatsapp_service, "get_cached_data", lambda: {"products": [], "aliases": []})
+    monkeypatch.setattr(whatsapp_service, "get_categories", lambda: [])
+    monkeypatch.setattr(whatsapp_service, "_load_buyer_profile", lambda _sender: None)
 
     asyncio.run(
         whatsapp_service.handle_incoming_message(
@@ -133,7 +224,7 @@ def test_returning_sender_with_expired_session_gets_timeout_message(monkeypatch)
         )
     )
 
-    assert "previous session timed out" in sent_messages[0]
+    assert "Welcome to SocioMED" in sent_messages[0]
     assert saved_sessions["256700111111"]["state"] == ConversationState.MENU.value
 
 

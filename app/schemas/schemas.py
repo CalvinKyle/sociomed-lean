@@ -5,17 +5,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CatalogOffer(BaseModel):
+    """Buyer-safe offer view.
+
+    Deliberately omits exact stock quantities and supplier identity
+    (`stock_qty`, `vendor_id`, `vendor_name`). Those stay in internal data for
+    sales operations only. Prices are present only when verified; otherwise
+    `starting_price`/`max_price` are null (price on quotation).
+    """
+
     product_id: str
     product_name: str
-    brand: str
+    brand: Optional[str] = None
     sku: Optional[str] = None
     uom: Optional[str] = None
-    vendor_id: Optional[str] = None
-    vendor_name: Optional[str] = None
     min_qty: int = 1
     starting_price: Optional[int] = None
     max_price: Optional[int] = None
-    stock_qty: int = 0
     lead_time_days: Optional[int] = None
     currency: str = "UGX"
 
@@ -79,6 +84,13 @@ class RFQCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
     currency: str = Field(default="UGX", max_length=10)
     source: str = Field(default="api", max_length=50)
+    procurement_stage: str = Field(default="formal_purchase", max_length=50)
+    formal_quote: bool = True
+    required_by: Optional[str] = Field(default=None, max_length=120)
+    payment_preference: Optional[str] = Field(default=None, max_length=120)
+    destination_country: Optional[str] = Field(default=None, max_length=80)
+    equipment_review_required: bool = False
+    manual_review_reason: Optional[str] = Field(default=None, max_length=120)
 
     product_name: Optional[str] = Field(default=None, max_length=160)
     product_id: Optional[str] = Field(default=None, max_length=120)

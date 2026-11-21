@@ -1,5 +1,22 @@
 # Changes
 
+## Pilot Readiness (steps 1–3)
+
+- Render Blueprint: paid always-on web plan, paid Postgres and Key Value defaults, deploys from `main` and manual (`autoDeployTrigger: "off"`). Free Postgres expires after 30 days and free Key Value is not persistent.
+- Catalogue API (`/api/catalog/*`) now requires the API key. Responses and the WhatsApp featured-offer copy no longer include `stock_qty`, `vendor_id` or `vendor_name`.
+- Price gate: new `pricing.price_status` (migration `0013_price_status`, synced from the sheet). Buyers see a price only when it is `verified`, positive and not past `price_valid_until`; otherwise "Price on quotation". Existing prices start `unverified`.
+- Catalogue lint (`app/core/catalogue_lint.py`, `scripts/lint_catalogue.py`), logged on every sync.
+- Fix: dates in the cached dataset made `json.dumps` fail, silently disabling the Redis cache once a taxonomy version was active or any `price_valid_until` was set.
+
+## Free-Tier Twilio Sandbox Deployment
+
+- Run Alembic migrations with retries in the Docker start command, avoiding Render's paid pre-deploy feature.
+- Reduce the Sandbox web service to one Gunicorn worker and remove paid worker services from the free-tier Blueprint.
+- Add a public, non-secret `/api/health/twilio` readiness check for provider configuration, callback URL, database schema, and Redis.
+- Reject incompatible Twilio Conversations payloads with an explicit error instead of silently returning success.
+- Derive public and callback URLs from Render's automatic external URL when explicit values are not set.
+- Keep Google Sheets credentials and sales routing optional for basic chat startup.
+
 ## Code Review Fixes
 
 - Hardened WhatsApp webhook handling so non-text messages are acknowledged without crashing or corrupting the conversation state.

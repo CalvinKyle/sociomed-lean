@@ -13,4 +13,5 @@ venv/
 .venv*/
 .vscode/
 .DS_Store
+~$*.xlsx
 logs/

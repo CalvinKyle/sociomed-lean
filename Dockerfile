@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+RUN chmod +x scripts/start_web.sh
+
 # Create logs directory
 RUN mkdir -p logs
 
@@ -25,5 +27,6 @@ ENV PORT=10000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/api/health/liveness', timeout=5)"
 
-# Start application
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "app.main:app", "--bind", "0.0.0.0:10000"]
+# Start the web service. On Render's free tier this script can run Alembic
+# before Gunicorn because pre-deploy commands are not available.
+CMD ["./scripts/start_web.sh"]

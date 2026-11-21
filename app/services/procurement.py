@@ -5,6 +5,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import SALES_AGENT_PHONE
+from app.core.conversation_copy import conversation_message
 from app.core.rfq_status import (
     BUYER_NOTIFIABLE_STATUSES,
     RFQ_STATUSES,
@@ -144,14 +145,8 @@ def mark_rfq_status(
 
 
 BUYER_STATUS_MESSAGES = {
-    "confirmed": (
-        "Good news — your order (RFQ #{rfq_id}) for {product_name} is confirmed. "
-        "The supplier is preparing it and we'll follow up with delivery details shortly."
-    ),
-    "fulfilled": (
-        "Your order (RFQ #{rfq_id}) for {product_name} has been fulfilled. "
-        "Thank you for sourcing through SocioMed — reply 1 any time to start your next order."
-    ),
+    "confirmed": "buyer_status_confirmed",
+    "fulfilled": "buyer_status_fulfilled",
 }
 
 
@@ -160,11 +155,11 @@ async def notify_buyer_of_status_change(rfq: RFQRequest) -> bool:
     if rfq.status not in BUYER_NOTIFIABLE_STATUSES:
         return False
 
-    template = BUYER_STATUS_MESSAGES.get(rfq.status)
-    if not template:
+    copy_key = BUYER_STATUS_MESSAGES.get(rfq.status)
+    if not copy_key:
         return False
 
-    message = template.format(rfq_id=rfq.id, product_name=rfq.product_name)
+    message = conversation_message(copy_key, rfq_id=rfq.id, product_name=rfq.product_name)
     result = await send_whatsapp_message_result(rfq.phone, message)
     log_audit_event(
         rfq.phone,

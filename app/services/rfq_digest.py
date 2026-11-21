@@ -61,7 +61,7 @@ def build_daily_rfq_digest(now: datetime | None = None) -> str:
         )
 
     lines = [
-        "SocioMed daily RFQ digest (last 24h)",
+        "SocioMED daily RFQ digest (last 24h)",
         f"New RFQs: {len(new_rfqs)}",
         f"Status changes: {len(status_changes)}",
     ]
