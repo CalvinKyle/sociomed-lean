@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import Boolean, JSON, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -87,6 +87,9 @@ class Pricing(Base):
     unit_price = Column(Integer, nullable=False)
     price_valid_until = Column(Date)
     currency = Column(String, default="UGX", server_default="UGX", nullable=False)
+    # Buyers only ever see prices whose status is exactly "verified"
+    # (see app/core/pricing.py). Everything else is "Price on quotation".
+    price_status = Column(String, default="unverified", server_default="unverified", nullable=False)
 
 class Alias(Base):
     __tablename__ = "aliases"
@@ -338,6 +341,11 @@ class FunnelEvent(Base):
     )
 
 
+def _plain(value):
+    """JSON-safe form of a column value (dates must survive the Redis cache)."""
+    return value.isoformat() if isinstance(value, (date, datetime)) else value
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -370,7 +378,7 @@ def load_data():
         active_version_payload = None
         if active_version:
             active_version_payload = {
-                column.name: getattr(active_version, column.name)
+                column.name: _plain(getattr(active_version, column.name))
                 for column in TaxonomyVersion.__table__.columns
             }
             assignments = (
@@ -466,7 +474,7 @@ def load_data():
             "products": product_rows,
             "vendors": [{c.name: getattr(v, c.name) for c in Vendor.__table__.columns} for v in db.query(Vendor).all()],
             "inventory": [{c.name: getattr(i, c.name) for c in Inventory.__table__.columns} for i in db.query(Inventory).all()],
-            "pricing": [{c.name: getattr(pr, c.name) for c in Pricing.__table__.columns} for pr in db.query(Pricing).all()],
+            "pricing": [{c.name: _plain(getattr(pr, c.name)) for c in Pricing.__table__.columns} for pr in db.query(Pricing).all()],
             "aliases": [{c.name: getattr(a, c.name) for c in Alias.__table__.columns} for a in db.query(Alias).all()],
             "taxonomy_version": active_version_payload,
             "product_classes": class_rows,

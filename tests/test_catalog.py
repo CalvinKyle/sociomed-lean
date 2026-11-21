@@ -48,9 +48,9 @@ def _sample_data():
             },
         ],
         "pricing": [
-            {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200},
-            {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100},
-            {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 5, "max_qty": None, "unit_price": 4500},
+            {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200, "price_status": "verified"},
+            {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100, "price_status": "verified"},
+            {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 5, "max_qty": None, "unit_price": 4500, "price_status": "verified"},
         ],
         "vendors": [
             {"vendor_id": "v1", "name": "MedSource", "phone": "256700111111"},
@@ -88,11 +88,11 @@ def _sample_data():
         },
         "pricing_by_inventory": {
             "i1": [
-                {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200},
-                {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100},
+                {"pricing_id": "pr1", "inventory_id": "i1", "min_qty": 10, "max_qty": 99, "unit_price": 1200, "price_status": "verified"},
+                {"pricing_id": "pr2", "inventory_id": "i1", "min_qty": 100, "max_qty": None, "unit_price": 1100, "price_status": "verified"},
             ],
             "i2": [
-                {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 5, "max_qty": None, "unit_price": 4500},
+                {"pricing_id": "pr3", "inventory_id": "i2", "min_qty": 5, "max_qty": None, "unit_price": 4500, "price_status": "verified"},
             ],
         },
         "related_by_product": {"p1": ["p2"], "p2": []},

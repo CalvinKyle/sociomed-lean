@@ -18,14 +18,62 @@ def _client(monkeypatch):
     return TestClient(app)
 
 
-def test_catalog_browse_is_public(monkeypatch):
+import pytest
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/catalog/categories", "/api/catalog/featured", "/api/catalog/search?q=gloves"],
+)
+def test_catalog_endpoints_require_api_key(monkeypatch, path):
+    client = _client(monkeypatch)
+
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers={"X-API-Key": "wrong"}).status_code == 401
+
+
+def test_catalog_browse_works_with_api_key(monkeypatch):
     client = _client(monkeypatch)
     monkeypatch.setattr(routes, "get_categories", lambda: ["consumables"])
 
-    response = client.get("/api/catalog/categories")
+    response = client.get("/api/catalog/categories", headers={"X-API-Key": "secret"})
 
     assert response.status_code == 200
     assert response.json() == {"total_categories": 1, "categories": ["consumables"]}
+
+
+INTERNAL_OFFER = {
+    "product_id": "p1",
+    "product_name": "Exam gloves",
+    "brand": "Acme",
+    "sku": "SM-1",
+    "uom": "box",
+    "vendor_id": "SUP-JMS",
+    "vendor_name": "Joint Medical Store",
+    "min_qty": 1,
+    "starting_price": None,
+    "max_price": None,
+    "stock_qty": 4321,
+    "lead_time_days": 3,
+    "currency": "UGX",
+}
+
+
+@pytest.mark.parametrize("path", ["/api/catalog/featured", "/api/catalog/search?q=gloves"])
+def test_catalog_responses_never_expose_stock_or_supplier(monkeypatch, path):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(routes, "get_featured_catalog", lambda **kwargs: [dict(INTERNAL_OFFER)])
+    monkeypatch.setattr(routes, "search_catalog", lambda *args, **kwargs: [dict(INTERNAL_OFFER)])
+    monkeypatch.setattr(routes, "record_funnel_event", lambda *args, **kwargs: None)
+
+    response = client.get(path, headers={"X-API-Key": "secret"})
+
+    assert response.status_code == 200
+    body = response.text
+    for forbidden in ("stock_qty", "vendor_id", "vendor_name", "4321", "SUP-JMS", "Joint Medical Store"):
+        assert forbidden not in body
+    offer = response.json().get("matches", response.json().get("featured"))[0]
+    assert offer["starting_price"] is None  # unverified price stays hidden
 
 
 def test_liveness_is_public_and_returns_process_status(monkeypatch):

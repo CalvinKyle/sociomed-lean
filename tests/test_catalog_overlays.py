@@ -55,8 +55,8 @@ def test_native_currency_conversion_in_search():
     legacy = {"pricing": [{"unit_price": 1000, "min_qty": 1}], "default_price": 1000}
     assert convert_result_prices(legacy, "UGX") == legacy
     assert convert_price(1000, "KES") == round(1000 * EXCHANGE_RATES["KES"])
-    data = {"inventory_by_product": {"p": [{"inventory_id": "i", "vendor_id": "v", "uom": "unit"}]}, "vendors_by_id": {"v": {"vendor_id": "v"}}, "pricing_by_inventory": {"i": [{"unit_price": 100, "min_qty": 1, "currency": "KES"}]}}
+    data = {"inventory_by_product": {"p": [{"inventory_id": "i", "vendor_id": "v", "uom": "unit"}]}, "vendors_by_id": {"v": {"vendor_id": "v"}}, "pricing_by_inventory": {"i": [{"unit_price": 100, "min_qty": 1, "currency": "KES", "price_status": "verified"}]}}
     assert get_results("p", data, "UGX")[0]["default_price"] == round(100 / EXCHANGE_RATES["KES"])
     assert get_results("p", data, "UGX")[0]["pricing"][0]["currency"] == "UGX"
-    data["pricing_by_inventory"]["i"] = [{"unit_price": 1000, "min_qty": 1, "currency": "UGX"}]
+    data["pricing_by_inventory"]["i"] = [{"unit_price": 1000, "min_qty": 1, "currency": "UGX", "price_status": "verified"}]
     assert get_results("p", data, "KES")[0]["default_price"] == round(1000 * EXCHANGE_RATES["KES"])

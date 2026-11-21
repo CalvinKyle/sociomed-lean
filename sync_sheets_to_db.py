@@ -18,6 +18,8 @@ from typing import Callable
 
 sys.path.insert(0, ".")
 
+from app.core.catalogue_lint import lint_catalogue
+from app.core.pricing import normalize_price_status
 from app.core.sheet_sync import (
     prepare_sheet_data,
     split_multi_value_cell,
@@ -194,6 +196,11 @@ PRICING_FIELDS = {
         "unit_price", lambda value: _coerce_int(value, default=0), default=0
     ),
     "price_valid_until": FieldSpec("price_valid_until", _coerce_date),
+    # Only the exact word "verified" lets buyers see this price. A missing
+    # column or blank cell means "unverified" (price on quotation).
+    "price_status": FieldSpec(
+        "price_status", normalize_price_status, default="unverified"
+    ),
 }
 TAXONOMY_VERSION_FIELDS = {
     "name": FieldSpec("name", _coerce_text),
@@ -843,6 +850,13 @@ def sync_catalog_snapshot(db, data: dict[str, list[dict]], dry_run: bool = False
     """Validate and version one prepared catalog snapshot in a single transaction."""
     validation = validate_catalog_snapshot(data)
     filtered = validation.data
+    try:
+        lint_report = lint_catalogue(data)
+        logger.warning("Catalogue lint: %s", lint_report.summary_line())
+        for finding in lint_report.findings[:25]:
+            logger.warning("Catalogue lint [%s] %s %s: %s", finding.severity, finding.code, finding.entity_id, finding.message)
+    except Exception:  # lint must never block a sync
+        logger.exception("Catalogue lint failed")
     summary = {
         tab_name: _blank_summary()
         for tab_name in dict.fromkeys((*CORE_TABS, *filtered.keys()))

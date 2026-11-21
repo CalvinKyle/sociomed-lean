@@ -6,6 +6,7 @@ from rapidfuzz import fuzz
 
 from app.core.conversation_copy import conversation_message
 from app.core.currency import format_price, get_currency_for_phone
+from app.core.pricing import PRICE_ON_QUOTATION
 from app.core.states import ConversationState
 from app.core.utils import get_session, has_seen_before, log_audit_event, save_session, send_whatsapp_message
 from app.core.validators import (
@@ -127,18 +128,21 @@ def _featured_offers_message(currency: str) -> str:
     lines = [conversation_message("featured_header")]
     for index, offer in enumerate(offers, start=1):
         starting_price = offer.get("starting_price")
-        price_text = format_price(starting_price, currency) if starting_price is not None else "Price on request"
-        uom = offer.get("uom") or "unit"
+        price_text = (
+            f"From {format_price(starting_price, currency)} per {offer.get('uom') or 'unit'}"
+            if starting_price is not None
+            else PRICE_ON_QUOTATION
+        )
+        lead_time_days = offer.get("lead_time_days")
+        lead_time = f"{lead_time_days} days" if lead_time_days else "confirmed in quotation"
+        # Never show supplier names or exact stock quantities to buyers.
         lines.append(conversation_message(
             "featured_offer",
             index=index,
             product_name=offer["product_name"],
-            brand=offer["brand"],
-            vendor_name=offer.get("vendor_name", "Supplier"),
+            brand=offer.get("brand") or "Generic",
             price_text=price_text,
-            uom=uom,
-            stock_qty=offer.get("stock_qty", 0),
-            lead_time_days=offer.get("lead_time_days", "N/A"),
+            lead_time=lead_time,
         ))
 
     lines.append(conversation_message("featured_footer"))
@@ -239,7 +243,7 @@ def _offer_price_ranges(results: list[Dict], currency: str) -> str:
     return "\n".join(
         f"{format_price_range(min(prices), max(prices), code)} / {uom}"
         for (code, uom), prices in sorted(buckets.items())
-    ) or "Price on request"
+    ) or PRICE_ON_QUOTATION
 
 
 def _build_product_groups(products: list[Dict], data: Dict, currency: str) -> list[Dict]:
@@ -424,7 +428,7 @@ def _append_related_products(reply: str, product: Dict, currency: str) -> tuple[
     lines = [reply, "", conversation_message("related_header")]
     for index, related in enumerate(related_products, start=1):
         price = related.get("starting_price")
-        price_text = format_price(price, currency) if price is not None else "Price on request"
+        price_text = format_price(price, currency) if price is not None else PRICE_ON_QUOTATION
         lines.append(conversation_message(
             "related_offer",
             index=index,
@@ -1431,14 +1435,20 @@ async def handle_incoming_message(message: Dict):
             selected_item=selected,
             quantity=quantity,
         )
-        await send_whatsapp_message(
-            sender,
-            conversation_message(
-                "price_menu",
-                price_text=format_price(selected.get("default_price", 0), currency),
+        default_price = selected.get("default_price")
+        if default_price is None:
+            # Price not verified by the team: never show a number.
+            price_message = conversation_message(
+                "price_menu_quotation",
                 uom=selected.get("uom", "unit"),
-            ),
-        )
+            )
+        else:
+            price_message = conversation_message(
+                "price_menu",
+                price_text=format_price(default_price, currency),
+                uom=selected.get("uom", "unit"),
+            )
+        await send_whatsapp_message(sender, price_message)
         return
 
     if current_state == ConversationState.VIEWING_PRICE.value:

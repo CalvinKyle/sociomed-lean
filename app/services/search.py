@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from rapidfuzz import fuzz
 
 from app.core.exchange_rates import convert_result_prices
+from app.core.pricing import displayable_tiers
 from app.core.sheet_sync import split_multi_value_cell
 
 
@@ -269,7 +270,12 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
         # Pricing tiers are in base currency (UGX) from Google Sheets
         pricing_tiers = sorted(pricing_tiers, key=lambda x: x["min_qty"])
         first_tier = pricing_tiers[0]
-        
+
+        # Price gate: buyers only see prices the team has verified (and that
+        # have not expired). Otherwise the offer stays visible but unpriced
+        # ("Price on quotation"). Verification is all-or-nothing per offer.
+        visible_tiers = displayable_tiers(pricing_tiers)
+
         result = {
             "inventory_id": inv.get("inventory_id"),
             "sku": inv.get("sku"),
@@ -278,17 +284,18 @@ def get_results(product_id: str, data: Dict, currency: str = "UGX") -> List[Dict
             "uom": inv.get("uom") or "unit",
             "stock_qty": inv.get("stock_qty", 0),
             "lead_time_days": inv.get("lead_time_days", "N/A"),
-            "pricing": pricing_tiers,  # Still in base currency
+            "pricing": visible_tiers,  # Still in base currency; empty = on quotation
+            "price_verified": bool(visible_tiers),
             "min_qty": first_tier.get("min_qty", 1),
-            "default_price": first_tier.get("unit_price"),  # Still in base currency
+            "default_price": visible_tiers[0].get("unit_price") if visible_tiers else None,
             "vendor_id": vendor["vendor_id"],
             "vendor_phone": vendor.get("phone"),
             "vendor_name": vendor.get("name", ""),
         }
-        
+
         # Convert prices to buyer's currency
         result = convert_result_prices(result, currency, source_currency=first_tier.get("currency") or "UGX")
-        
+
         results.append(result)
     
     # Sort by lowest entry price (now in buyer's currency)

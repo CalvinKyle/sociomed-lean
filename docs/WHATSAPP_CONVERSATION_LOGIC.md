@@ -140,13 +140,13 @@ Every outbound WhatsApp message is passed through `brand_whatsapp_message`. If t
 | Search and disambiguation | `bulk_detected`, `bulk_complex`, `search_invalid`, `search_no_match`, `search_no_live_offer_menu`, `search_no_live_offer_rfq`, `requested_quantity`, `ambiguous_header`, `ambiguous_next_large`, `ambiguous_next_small`, `disambiguation_invalid` |
 | Category selection | `category_invalid`, `category_product_invalid`, `category_no_live_offer` |
 | Offers and related products | `results_empty`, `results_header`, `result_title`, `result_sku`, `result_summary`, `result_availability`, `results_footer`, `availability_in_stock`, `availability_sourcing`, `related_header`, `related_offer`, `related_footer`, `related_invalid`, `related_missing`, `related_no_live_offer`, `offer_number_prompt`, `offer_selected`, `offer_invalid` |
-| Quantity and price | `quantity_integer`, `quantity_positive`, `quantity_below_minimum`, `price_menu`, `returning_to_offers`, `price_menu_invalid` |
+| Quantity and price | `quantity_integer`, `quantity_positive`, `quantity_below_minimum`, `price_menu`, `price_menu_quotation`, `returning_to_offers`, `price_menu_invalid` |
 | RFQ | `direct_rfq_prompt`, `rfq_contact_prompt`, `rfq_submit_error`, `supplier_notified`, `supplier_manual`, `rfq_received`, `direct_rfq_invalid_format`, `direct_rfq_invalid_data`, `direct_rfq_submit_error`, `bulk_rfq_received`, `direct_rfq_received` |
 | Sales and follow-up | `sales_handoff_error`, `sales_handoff_received`, `buyer_status_confirmed`, `buyer_status_fulfilled`, `worker_failure` |
 
 ## Supported placeholders
 
-Preserve these placeholders wherever they already occur: `{message_type}`, `{index}`, `{product_name}`, `{brand}`, `{vendor_name}`, `{price_text}`, `{uom}`, `{stock_qty}`, `{lead_time_days}`, `{category_name}`, `{first_name}`, `{menu}`, `{organization}`, `{delivery_location}`, `{prompt}`, `{quantity}`, `{results}`, `{sku_line}`, `{min_qty}`, `{minimum_quantity}`, `{routing_message}`, `{rfq_id}`, `{lead_id}`, `{counter}`, `{sku}`, `{price_range}`, and `{availability}`.
+Preserve these placeholders wherever they already occur: `{message_type}`, `{index}`, `{product_name}`, `{brand}`, `{price_text}`, `{uom}`, `{lead_time}`, `{lead_time_days}`, `{category_name}`, `{first_name}`, `{menu}`, `{organization}`, `{delivery_location}`, `{prompt}`, `{quantity}`, `{results}`, `{sku_line}`, `{min_qty}`, `{minimum_quantity}`, `{routing_message}`, `{rfq_id}`, `{lead_id}`, `{counter}`, `{sku}`, `{price_range}`, and `{availability}`.
 
 ## Verification after copy changes
 

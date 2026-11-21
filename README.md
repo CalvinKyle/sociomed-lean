@@ -13,7 +13,7 @@ If your goal is to get this in front of procurement teams and suppliers within t
 2. `app/api/routes.py`
    These routes are the fastest bridge to market. You can connect them to a simple landing page, Typeform, Retool, or a no-code frontend immediately.
 3. `app/services/catalog.py`
-   This powers a public procurement-facing catalog preview without building a full frontend first.
+   This powers an internal catalog preview. The `/api/catalog/*` endpoints require the API key and never return exact stock or supplier identity.
 4. `app/services/procurement.py` and `app/models/db.py`
    These capture leads and RFQs so you have an actual pipeline instead of ephemeral chat messages.
 5. `Dockerfile`, `app/core/config.py`, and `app/core/logging_config.py`
@@ -183,7 +183,7 @@ Before outreach, make sure these are done:
 
 1. Load a high-confidence catalog into Sheets, then run `python3 sync_sheets_to_db.py`.
 2. Set `SALES_AGENT_PHONE` so every buyer request gets routed to a human.
-3. Deploy the API and verify authenticated `/api/health`, `/docs`, public `/api/catalog/featured`, and public `/api/catalog/search?q=gloves`.
+3. Deploy the API and verify authenticated `/api/health`, `/docs` (off in production), and API-key-protected `/api/catalog/featured` and `/api/catalog/search?q=gloves` (expect 401 without the key).
 4. For Twilio beta, set `ASYNC_WHATSAPP_PROCESSING=false` and `RUN_DB_MIGRATIONS=true`, follow [docs/TWILIO_BETA.md](docs/TWILIO_BETA.md), warm `/api/health/twilio`, join each tester to the Sandbox, and point the Sandbox webhook to `/api/webhook/twilio`.
 5. For Meta, connect the webhook to `/api/webhook` and confirm verification succeeds with `hub.verify_token`.
 6. Create one simple outbound asset: a landing page, Notion page, or demo form pointed at authenticated `/api/leads` and `/api/rfqs`.

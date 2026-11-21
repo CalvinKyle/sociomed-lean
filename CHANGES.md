@@ -1,5 +1,13 @@
 # Changes
 
+## Pilot Readiness (steps 1–3)
+
+- Render Blueprint: paid always-on web plan, paid Postgres and Key Value defaults, deploys from `main` and manual (`autoDeployTrigger: "off"`). Free Postgres expires after 30 days and free Key Value is not persistent.
+- Catalogue API (`/api/catalog/*`) now requires the API key. Responses and the WhatsApp featured-offer copy no longer include `stock_qty`, `vendor_id` or `vendor_name`.
+- Price gate: new `pricing.price_status` (migration `0013_price_status`, synced from the sheet). Buyers see a price only when it is `verified`, positive and not past `price_valid_until`; otherwise "Price on quotation". Existing prices start `unverified`.
+- Catalogue lint (`app/core/catalogue_lint.py`, `scripts/lint_catalogue.py`), logged on every sync.
+- Fix: dates in the cached dataset made `json.dumps` fail, silently disabling the Redis cache once a taxonomy version was active or any `price_valid_until` was set.
+
 ## Free-Tier Twilio Sandbox Deployment
 
 - Run Alembic migrations with retries in the Docker start command, avoiding Render's paid pre-deploy feature.

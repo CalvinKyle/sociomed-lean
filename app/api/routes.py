@@ -214,7 +214,12 @@ async def trigger_sheets_sync():
     return JSONResponse(status_code=status_code, content=result.as_dict())
 
 
-@router.get("/catalog/featured", response_model=FeaturedCatalogResponse, tags=["go-to-market"])
+@router.get(
+    "/catalog/featured",
+    response_model=FeaturedCatalogResponse,
+    tags=["go-to-market"],
+    dependencies=[Depends(require_api_key)],
+)
 async def featured_catalog(
     limit: int = Query(default=6, ge=1, le=20),
     currency: str = Query(default="UGX", description="Currency code (UGX, KES, etc.)")
@@ -224,13 +229,23 @@ async def featured_catalog(
     return FeaturedCatalogResponse(total_featured=len(featured), featured=featured)
 
 
-@router.get("/catalog/categories", response_model=CatalogCategoriesResponse, tags=["go-to-market"])
+@router.get(
+    "/catalog/categories",
+    response_model=CatalogCategoriesResponse,
+    tags=["go-to-market"],
+    dependencies=[Depends(require_api_key)],
+)
 async def catalog_categories():
     categories = get_categories()
     return CatalogCategoriesResponse(total_categories=len(categories), categories=categories)
 
 
-@router.get("/catalog/search", response_model=CatalogSearchResponse, tags=["go-to-market"])
+@router.get(
+    "/catalog/search",
+    response_model=CatalogSearchResponse,
+    tags=["go-to-market"],
+    dependencies=[Depends(require_api_key)],
+)
 async def public_catalog_search(
     q: str = Query(..., min_length=2, description="Search term from a procurement buyer"),
     limit: int = Query(default=5, ge=1, le=20),

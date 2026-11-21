@@ -168,8 +168,8 @@ Featured procurement offers:
 ### One featured-offer row — `featured_offer`
 
 ```text
-{index}. {product_name} - {brand} from {vendor_name}
-From {price_text} per {uom} | Stock {stock_qty} | Lead time {lead_time_days} days
+{index}. {product_name} - {brand}
+{price_text} | Indicative lead time: {lead_time}
 ```
 
 ### Featured-offer footer — `featured_footer`
@@ -529,6 +529,22 @@ Minimum order for this offer is {minimum_quantity} {uom}.
 
 ```text
 Estimated starting price: {price_text} per {uom}.
+
+Reply with:
+1. Request quotation
+2. Talk to sales
+3. Back to search results
+0. Main menu
+
+Type END if you are finished.
+```
+
+### Price-on-quotation menu — `price_menu_quotation`
+
+Shown instead of `price_menu` whenever the selected offer has no team-verified price.
+
+```text
+Price on quotation for each {uom}. Our team will confirm the price in your quotation.
 
 Reply with:
 1. Request quotation

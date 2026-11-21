@@ -1,5 +1,6 @@
 from app.core.currency import format_price
 from app.core.conversation_copy import conversation_message
+from app.core.pricing import PRICE_ON_QUOTATION
 
 
 def format_pricing_tiers(tiers, currency="UGX", uom="unit"):
@@ -27,8 +28,6 @@ def format_results(product_name, results, currency="UGX"):
     option_map = []
     for counter, item in enumerate(results[:5], start=1):
         all_prices = [tier["unit_price"] for tier in item["pricing"]]
-        min_price = min(all_prices) if all_prices else item.get("default_price", 0)
-        max_price = max(all_prices) if all_prices else item.get("default_price", 0)
         uom = item.get("uom") or "unit"
         sku = item.get("sku")
 
@@ -38,7 +37,11 @@ def format_results(product_name, results, currency="UGX"):
         msg += conversation_message(
             "result_summary",
             uom=uom,
-            price_range=format_price_range(min_price, max_price, currency),
+            price_range=(
+                format_price_range(min(all_prices), max(all_prices), currency)
+                if all_prices
+                else PRICE_ON_QUOTATION
+            ),
         )
         availability = conversation_message(
             "availability_in_stock" if (item.get("stock_qty") or 0) > 0 else "availability_sourcing"

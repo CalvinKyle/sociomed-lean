@@ -92,7 +92,7 @@ def get_cached_data() -> Dict[str, Any]:
         redis_client.setex(
             CACHE_KEY,
             CACHE_TTL_SECONDS,          # e.g. 300 seconds = 5 minutes
-            json.dumps(data)
+            json.dumps(data, default=str)
         )
         logger.info("✅ Data cached in Redis")
     except Exception as e:

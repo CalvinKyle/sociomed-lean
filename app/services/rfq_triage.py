@@ -4,6 +4,7 @@ from typing import Dict, Mapping, Optional
 
 from app.core.config import SMALL_RFQ_MAX_ITEMS
 from app.core.conversation_copy import conversation_message
+from app.core.pricing import PRICE_ON_QUOTATION
 from app.services.search import find_products, get_results
 
 
@@ -188,7 +189,7 @@ def format_ambiguous_match_message(matches: list[Dict]) -> str:
             "ambiguous_product_row",
             index=index,
             product_name=product.get("search_display_name") or product["name"],
-            price_text=product.get("price_text") or "Price on request",
+            price_text=product.get("price_text") or PRICE_ON_QUOTATION,
             variant_count=product.get("variant_count", 1),
             offer_count=product.get("offer_count", 0),
         )
