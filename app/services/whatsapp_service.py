@@ -1,3 +1,4 @@
+from app.core.uom import buyer_uom
 import logging
 import re
 from typing import Dict, Optional
@@ -131,7 +132,7 @@ def _featured_offers_message(currency: str) -> str:
     for index, offer in enumerate(offers, start=1):
         starting_price = offer.get("starting_price")
         price_text = (
-            f"From {format_price(starting_price, currency)} per {offer.get('uom') or 'unit'}"
+            f"From {format_price(starting_price, currency)} per {buyer_uom(offer.get('uom'))}"
             if starting_price is not None
             else PRICE_ON_QUOTATION
         )
@@ -237,7 +238,7 @@ def _prices_for_results(results: list[Dict]) -> list[int]:
 def _offer_price_ranges(results: list[Dict], currency: str) -> str:
     buckets = {}
     for result in results:
-        uom = str(result.get("uom") or "unit").strip()
+        uom = buyer_uom(result.get("uom"))
         for tier in result.get("pricing") or [{"unit_price": result.get("default_price")}]:
             if tier.get("unit_price") is not None:
                 key = (tier.get("currency") or result.get("currency") or currency, uom)
@@ -436,7 +437,7 @@ def _append_related_products(reply: str, product: Dict, currency: str) -> tuple[
             index=index,
             product_name=related["product_name"],
             price_text=price_text,
-            uom=related.get("uom") or "unit",
+            uom=buyer_uom(related.get("uom")),
         ))
     lines.append(conversation_message("related_footer"))
     return "\n".join(lines), related_products
@@ -1393,9 +1394,9 @@ async def handle_incoming_message(message: Dict):
                 sender,
                 conversation_message(
                     "offer_selected",
-                    brand=selected["brand"],
+                    brand=selected.get("brand") or "Option 1",
                     sku_line=sku_line,
-                    uom=selected.get("uom", "unit"),
+                    uom=buyer_uom(selected.get("uom")),
                     min_qty=selected.get("min_qty", 1),
                 ),
             )
@@ -1423,7 +1424,7 @@ async def handle_incoming_message(message: Dict):
                 conversation_message(
                     "quantity_below_minimum",
                     minimum_quantity=minimum_quantity,
-                    uom=selected.get("uom", "unit"),
+                    uom=buyer_uom(selected.get("uom")),
                 ),
             )
             return
@@ -1442,13 +1443,13 @@ async def handle_incoming_message(message: Dict):
             # Price not verified by the team: never show a number.
             price_message = conversation_message(
                 "price_menu_quotation",
-                uom=selected.get("uom", "unit"),
+                uom=buyer_uom(selected.get("uom")),
             )
         else:
             price_message = conversation_message(
                 "price_menu",
                 price_text=format_price(default_price, currency),
-                uom=selected.get("uom", "unit"),
+                uom=buyer_uom(selected.get("uom")),
             )
         await send_whatsapp_message(sender, price_message)
         return
@@ -1517,9 +1518,9 @@ async def handle_incoming_message(message: Dict):
                 vendor_name=selected.get("vendor_name"),
                 vendor_phone=selected.get("vendor_phone"),
                 notes=(
-                    f"Selected brand: {selected.get('brand', 'Generic')} | "
+                    f"Selected brand: {selected.get('brand') or 'Generic'} | "
                     f"SKU: {selected.get('sku') or 'N/A'} | "
-                    f"UoM: {selected.get('uom', 'unit')}"
+                    f"UoM: {buyer_uom(selected.get('uom'))}"
                 ),
                 currency=currency,
                 equipment_review_required=is_equipment_product(product),
@@ -1633,7 +1634,7 @@ async def _collect_requested_rfq(sender, text, session, currency):
             return
     _transition_session(sender, ConversationState.DIRECT_RFQ.value, ConversationState.DIRECT_RFQ,
         request_draft=draft, request_confirm=True, manual_review_reason=session.get('manual_review_reason'))
-    lines = [f"{n}. {i['product_name']} x{i['quantity']} {i.get('uom') or 'unit'}" +
+    lines = [f"{n}. {i['product_name']} x{i['quantity']} {buyer_uom(i.get('uom'))}" +
              ('' if i['quantity_stated'] else ' (quantity not stated)') for n, i in enumerate(draft['items'], 1)]
     # Send every line in bounded messages, without silently truncating a list.
     chunk = ''

@@ -79,7 +79,7 @@
   "result_title": "*{counter}. {brand}*\n",
   "result_sku": "SKU: {sku}\n",
   "result_summary": "UoM: {uom} | {price_range}\n",
-  "result_availability": "Min qty: {min_qty} {uom} | Availability: {availability} | Indicative lead time: {lead_time_days} days\n",
+  "result_availability": "Min qty: {min_qty} {uom} | Availability: {availability} | {lead_time}\n",
   "results_footer": "0 → Main menu | END → Close session",
   "availability_in_stock": "Available",
   "availability_sourcing": "Sourcing available",

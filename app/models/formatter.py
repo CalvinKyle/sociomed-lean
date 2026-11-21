@@ -1,9 +1,11 @@
+from app.core.uom import buyer_uom
 from app.core.currency import format_price
 from app.core.conversation_copy import conversation_message
 from app.core.pricing import PRICE_ON_QUOTATION
 
 
 def format_pricing_tiers(tiers, currency="UGX", uom="unit"):
+    uom = buyer_uom(uom)
     lines = []
     for t in tiers[:3]:
         price = format_price(t["unit_price"], currency)
@@ -28,10 +30,10 @@ def format_results(product_name, results, currency="UGX"):
     option_map = []
     for counter, item in enumerate(results[:5], start=1):
         all_prices = [tier["unit_price"] for tier in item["pricing"]]
-        uom = item.get("uom") or "unit"
+        uom = buyer_uom(item.get("uom"))
         sku = item.get("sku")
 
-        msg += conversation_message("result_title", counter=counter, brand=item["brand"])
+        msg += conversation_message("result_title", counter=counter, brand=item.get("brand") or f"Option {counter}")
         if sku:
             msg += conversation_message("result_sku", sku=sku)
         msg += conversation_message(
@@ -51,13 +53,13 @@ def format_results(product_name, results, currency="UGX"):
             min_qty=item.get("min_qty", 1),
             uom=uom,
             availability=availability,
-            lead_time_days=item.get("lead_time_days", "TBC"),
+            lead_time=(f"Indicative lead time: {item['lead_time_days']} days" if item.get("lead_time_days") is not None else "Lead time confirmed in quotation"),
         )
         msg += format_pricing_tiers(item["pricing"], currency, uom=uom) + "\n\n"
 
         option_map.append({
             "option": counter,
-            "brand": item.get("brand", "Generic"),
+            "brand": item.get("brand") or f"Option {counter}",
             "sku": sku,
             "uom": uom,
             "inventory_id": item.get("inventory_id"),

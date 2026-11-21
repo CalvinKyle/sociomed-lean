@@ -1,0 +1,46 @@
+{
+  "PC1": {
+    "label": "piece",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BP1": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BP12": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BPR1": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BP100": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BTL1": {
+    "label": "bottle",
+    "note": "confirm packaging meaning with owner"
+  },
+  "KIT": {
+    "label": "kit",
+    "note": "confirm packaging meaning with owner"
+  },
+  "JC1": {
+    "label": "container",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BP10": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BTS50": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  },
+  "BPR100": {
+    "label": "pack",
+    "note": "confirm packaging meaning with owner"
+  }
+}

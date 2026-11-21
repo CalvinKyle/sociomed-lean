@@ -740,3 +740,5 @@ The state-by-state routing, global commands, intent order, search behavior, and 
 `request_confirm`: Reply YES to send, or send the corrected item list.
 
 `request_item_limit`: Please send up to 20 items with positive quantities. Send longer lists in parts, or reply SALES.
+
+`result_availability` now takes `{lead_time}`: missing values say "Lead time confirmed in quotation". Null brands use "Option 1".

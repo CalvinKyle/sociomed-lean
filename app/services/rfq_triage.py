@@ -1,3 +1,4 @@
+from app.core.uom import buyer_uom
 import re
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional
@@ -224,7 +225,7 @@ def parse_requested_items(text: str, products=None) -> list[dict]:
             quantity, stated, part = int(suffix[1]), True, part[:suffix.start()].strip()
         elif prefix:
             quantity, stated, part = int(prefix[1]), True, prefix[2].strip()
-        unit = re.match(r'^(boxes?|packs?|cartons?|pieces?|units?|pairs?|sets?|rolls?|bottles?|bags?|kits?)\s+(?:of\s+)?(.+)$', part, re.I)
+        unit = re.match(r'^(box(?:es)?|packs?|cartons?|pieces?|units?|pairs?|sets?|rolls?|bottles?|bags?|kits?)\s+(?:of\s+)?(.+)$', part, re.I)
         if unit:
             uom, part = unit[1].lower(), unit[2].strip()
         if not part or quantity <= 0:
@@ -258,5 +259,6 @@ def resolve_requested_items(items: list[dict], data: dict, currency='UGX') -> li
                 if tier['min_qty'] <= item['quantity'] and (tier.get('max_qty') is None or item['quantity'] <= tier['max_qty']):
                     line['unit_price'] = tier['unit_price']
                     break
+        line["uom"] = buyer_uom(line.get("uom"))
         resolved.append(line)
     return resolved

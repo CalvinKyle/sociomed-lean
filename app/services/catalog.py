@@ -1,3 +1,4 @@
+from app.core.uom import buyer_uom
 # app/services/catalog.py
 
 from typing import Dict, List
@@ -19,7 +20,7 @@ def _build_offer(product: Dict, result: Dict, currency: str = DEFAULT_CURRENCY) 
         "product_name": product["name"],
         "brand": result.get("brand", "Generic"),
         "sku": result.get("sku"),
-        "uom": result.get("uom"),
+        "uom": buyer_uom(result.get("uom")),
         "vendor_id": result.get("vendor_id"),
         "vendor_name": result.get("vendor_name"),
         "min_qty": result.get("min_qty", 1),
