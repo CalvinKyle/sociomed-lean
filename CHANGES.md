@@ -42,3 +42,5 @@
 - Step 2: API-key RFQ list and serialized, best-effort operations sheet snapshots (RFQs, lines, leads); shared lazy credentials, RAW values, separate destination guard.
 
 - Step 3: shared quote/edit/review/approval/LPO workflow; 0014 migration; global rolling approval cap with immutable approval history and PostgreSQL transaction lock (single approvals count too). Editing invalidates quote/review/approval.
+
+- Step 4: mobile server-rendered /ops console with fail-closed Basic authentication, escaped content, same-origin and per-render cookie/form CSRF protection, using shared quote services.

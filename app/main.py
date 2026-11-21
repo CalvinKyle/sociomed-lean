@@ -57,6 +57,8 @@ app.add_middleware(SlowAPIMiddleware)
 
 # Include all routes
 app.include_router(api_router)
+from app.api.ops import router as ops_router
+app.include_router(ops_router)
 
 
 @app.get("/", dependencies=[Depends(require_api_key)])
