@@ -115,7 +115,7 @@ For a Twilio Sandbox beta, only these services are required:
 
 Set `ASYNC_WHATSAPP_PROCESSING=false` on the web service. The Celery worker, Celery beat, and Flower services can remain suspended or undeployed during Sandbox testing.
 
-The free-tier Blueprint does not define a Celery worker, beat, or Flower service. Add those as paid services later if asynchronous processing is required.
+The Blueprint does not define a Celery worker, beat, or Flower service. Add those as paid services later if asynchronous processing is required.
 
 Important production rules:
 

@@ -2,9 +2,14 @@ services:
   - type: web
     name: sociomed-lean
     runtime: docker
-    plan: free
-    branch: codex/twilio-whatsapp-beta
-    autoDeployTrigger: commit
+    # Paid, always-on instance. The free tier sleeps after 15 minutes idle, so
+    # the first WhatsApp message of the day could time out.
+    plan: starter
+    # `main` is the canonical branch (promoted from codex/twilio-whatsapp-beta;
+    # 2026_pivot is archived). Deploys are manual during the pilot so a push
+    # can never change what real customers are talking to.
+    branch: main
+    autoDeployTrigger: "off"
     healthCheckPath: /api/health/liveness
 
     envVars:
@@ -74,10 +79,13 @@ services:
 
   - type: keyvalue
     name: sociomed-redis
-    plan: free
+    # No `plan:` key = Render's default paid size (256 MB). Free Key Value has
+    # no persistence, so conversation sessions would vanish on every restart.
+    # Verify the resulting plan on the Render dashboard after the first sync.
     ipAllowList: []
     maxmemoryPolicy: allkeys-lru
 
 databases:
   - name: sociomed-postgres
-    plan: free
+    # No `plan:` key = Render's default paid size. Free Postgres expires 30
+    # days after creation and is deleted 14 days later. Verify on the dashboard.

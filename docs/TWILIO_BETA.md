@@ -4,7 +4,7 @@ The Twilio integration is configured through environment variables. Real credent
 
 For low-volume Sandbox testing, set `ASYNC_WHATSAPP_PROCESSING=false`. The Render web service will process each inbound message directly and no paid Celery background worker is required. Redis remains required for conversation sessions, caching, sender locks, and duplicate-message protection.
 
-The free-tier deployment runs `alembic upgrade head` from `scripts/start_web.sh` before Gunicorn starts. This replaces Render's paid pre-deploy command for the beta environment.
+The deployment runs `alembic upgrade head` from `scripts/start_web.sh` before Gunicorn starts. This replaces Render's paid pre-deploy command for the beta environment.
 
 ## What Was Added
 
@@ -68,7 +68,7 @@ Postgres and Redis are runtime requirements. The Blueprint generates an `API_KEY
 
 You can suspend or omit the Celery worker during Sandbox testing. Do not remove Redis: the synchronous path still uses it for sessions, caching, duplicate-message claims, and sender locks.
 
-The free-tier `render.yaml` intentionally defines only the web service, Postgres, and Key Value. Add worker services later when moving back to asynchronous processing.
+`render.yaml` defines only the web service (paid Starter, always-on, manual deploys from `main`), Postgres, and Key Value (both on Render's default paid sizes; confirm the plans on the Render dashboard after the first Blueprint sync). Add worker services later when moving back to asynchronous processing.
 
 ## 4. Configure the Twilio Sandbox Webhook
 
