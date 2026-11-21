@@ -742,3 +742,7 @@ The state-by-state routing, global commands, intent order, search behavior, and 
 `request_item_limit`: Please send up to 20 items with positive quantities. Send longer lists in parts, or reply SALES.
 
 `result_availability` now takes `{lead_time}`: missing values say "Lead time confirmed in quotation". Null brands use "Option 1".
+
+`quantity_prefill`: You asked for {quantity} {uom} — reply YES to use {quantity} or send another number.
+
+`quantity_total`: Indicative total {total} — subject to confirmation in your quotation.

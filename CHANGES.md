@@ -48,3 +48,5 @@
 - Step 5: structured natural/pipe item intake, per-item quantities, protected compound names, saved contact reuse, one-at-a-time missing fields and explicit confirmation; 20-item cap and verified tier resolution.
 
 - Step 6: conservative buyer UoM glossary; null brand and lead-time wording cleaned in offers; raw unit codes removed from buyer menus and structured RFQ items.
+
+- Step 7: preserve pending quantities through navigation, YES quantity prefill, revalidated quantity-tier prices and indicative totals; selected-offer RFQs retain their tier price and unit.

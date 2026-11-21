@@ -148,7 +148,7 @@ def _run_price_step(monkeypatch, default_price):
         "state": "SELECTING_PRODUCT",
         "product": {"product_id": "p", "name": "Exam gloves"},
         "options": [],
-        "selected_item": {"uom": "box", "min_qty": 1, "default_price": default_price},
+        "selected_item": {"uom": "box", "min_qty": 1, "default_price": default_price, "pricing": ([{"min_qty": 1, "max_qty": None, "unit_price": default_price, "price_status": "verified"}] if default_price else [])},
     })
     monkeypatch.setattr(whatsapp_service, "save_session", lambda sender, data: None)
     monkeypatch.setattr(whatsapp_service, "log_audit_event", lambda *args, **kwargs: None)

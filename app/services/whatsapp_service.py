@@ -7,7 +7,7 @@ from rapidfuzz import fuzz
 
 from app.core.conversation_copy import conversation_message
 from app.core.currency import format_price, get_currency_for_phone
-from app.core.pricing import PRICE_ON_QUOTATION
+from app.core.pricing import PRICE_ON_QUOTATION, displayable_tiers
 from app.core.states import ConversationState
 from app.core.utils import get_session, has_seen_before, log_audit_event, save_session, send_whatsapp_message
 from app.core.validators import (
@@ -628,7 +628,10 @@ def _log_user_input(sender: str, state: str, text: str) -> None:
 
 def _transition_session(sender: str, current_state: str, next_state: ConversationState, **payload) -> None:
     logger.info("state_transition sender=%s from=%s to=%s", sender, current_state, next_state.value)
+    previous = get_session(sender) or {}
     session_payload = {"state": next_state.value}
+    if next_state != ConversationState.IDLE and not payload.pop('clear_pending', False):
+        session_payload.update({k: previous[k] for k in ('pending_quantity', 'pending_uom') if k in previous})
     session_payload.update(payload)
     save_session(sender, session_payload)
 
@@ -895,6 +898,7 @@ async def handle_incoming_message(message: Dict):
                 "pending_quantity": entry_intent.quantity,
                 "pending_uom": entry_intent.uom,
             }
+            save_session(sender, session)
         elif entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "search":
             await send_whatsapp_message(sender, conversation_message("search_prompt"))
             _transition_session(sender, current_state, ConversationState.SEARCHING)
@@ -1398,7 +1402,7 @@ async def handle_incoming_message(message: Dict):
                     sku_line=sku_line,
                     uom=buyer_uom(selected.get("uom")),
                     min_qty=selected.get("min_qty", 1),
-                ),
+                ) + ("\n" + conversation_message('quantity_prefill', quantity=session['pending_quantity'], uom=buyer_uom(session.get('pending_uom') or selected.get('uom'))) if session.get('pending_quantity') else ''),
             )
             return
 
@@ -1407,7 +1411,7 @@ async def handle_incoming_message(message: Dict):
 
     if current_state == ConversationState.SELECTING_PRODUCT.value:
         try:
-            quantity = int(text_clean)
+            quantity = int(session.get('pending_quantity')) if text_clean == 'yes' and session.get('pending_quantity') else int(text_clean)
         except ValueError:
             await send_whatsapp_message(sender, conversation_message("quantity_integer"))
             return
@@ -1438,7 +1442,7 @@ async def handle_incoming_message(message: Dict):
             selected_item=selected,
             quantity=quantity,
         )
-        default_price = selected.get("default_price")
+        default_price = price_for_quantity(selected, quantity)
         if default_price is None:
             # Price not verified by the team: never show a number.
             price_message = conversation_message(
@@ -1451,6 +1455,8 @@ async def handle_incoming_message(message: Dict):
                 price_text=format_price(default_price, currency),
                 uom=buyer_uom(selected.get("uom")),
             )
+        if default_price is not None:
+            price_message += "\n" + conversation_message('quantity_total', total=format_price(default_price * quantity, currency))
         await send_whatsapp_message(sender, price_message)
         return
 
@@ -1513,6 +1519,9 @@ async def handle_incoming_message(message: Dict):
                 organization=organization,
                 delivery_location=delivery_location,
                 source="whatsapp_selected_offer",
+                items=[{'product_id': product.get('product_id'), 'product_name': product.get('name', 'Medical supply'),
+                        'vendor_id': selected.get('vendor_id'), 'quantity': quantity,
+                        'uom': buyer_uom(selected.get('uom')), 'unit_price': price_for_quantity(selected, quantity)}],
                 product_id=product.get("product_id"),
                 vendor_id=selected.get("vendor_id"),
                 vendor_name=selected.get("vendor_name"),
@@ -1541,7 +1550,7 @@ async def handle_incoming_message(message: Dict):
             sender,
             conversation_message("rfq_received", rfq_id=rfq_id, routing_message=supplier_text),
         )
-        _transition_session(sender, current_state, ConversationState.MENU)
+        _transition_session(sender, current_state, ConversationState.MENU, clear_pending=True)
         return
 
     if current_state == ConversationState.DIRECT_RFQ.value:
@@ -1602,7 +1611,7 @@ async def _collect_requested_rfq(sender, text, session, currency):
         except Exception:
             await send_whatsapp_message(sender, conversation_message('direct_rfq_submit_error'))
             return
-        _transition_session(sender, ConversationState.DIRECT_RFQ.value, ConversationState.MENU)
+        _transition_session(sender, ConversationState.DIRECT_RFQ.value, ConversationState.MENU, clear_pending=True)
         await send_whatsapp_message(sender, conversation_message('direct_rfq_received', rfq_id=rfq_id))
         return
     else:
@@ -1644,3 +1653,10 @@ async def _collect_requested_rfq(sender, text, session, currency):
             chunk = ''
         chunk += line[:1000] + '\n'
     await send_whatsapp_message(sender, chunk + conversation_message('request_confirm'))
+
+
+def price_for_quantity(offer, quantity):
+    for tier in displayable_tiers(offer.get('pricing', [])):
+        if tier['min_qty'] <= quantity and (tier.get('max_qty') is None or quantity <= tier['max_qty']):
+            return tier['unit_price']
+    return None

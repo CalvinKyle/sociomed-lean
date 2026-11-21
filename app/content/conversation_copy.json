@@ -93,5 +93,7 @@
   "request_organization": "What is your organisation or facility name?",
   "request_delivery_location": "Where should we deliver?",
   "request_confirm": "Reply YES to send, or send the corrected item list.",
-  "request_item_limit": "Please send up to 20 items with positive quantities. Send longer lists in parts, or reply SALES."
+  "request_item_limit": "Please send up to 20 items with positive quantities. Send longer lists in parts, or reply SALES.",
+  "quantity_prefill": "You asked for {quantity} {uom} — reply YES to use {quantity} or send another number.",
+  "quantity_total": "Indicative total {total} — subject to confirmation in your quotation."
 }
