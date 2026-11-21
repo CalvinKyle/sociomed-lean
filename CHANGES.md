@@ -38,3 +38,5 @@
 - Added route coverage for the unauthenticated liveness response.
 
 - Pilot step 1: disable supplier messaging; remove supplier contact from Redis options; team receipt copy; complete sales alerts with bounded chunks. Legacy flag conflict recorded in docs/PILOT_PR_REVIEW.md.
+
+- Step 2: API-key RFQ list and serialized, best-effort operations sheet snapshots (RFQs, lines, leads); shared lazy credentials, RAW values, separate destination guard.

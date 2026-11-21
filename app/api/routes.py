@@ -1,3 +1,4 @@
+from datetime import datetime
 import hashlib
 import hmac
 import json
@@ -480,3 +481,27 @@ async def twilio_whatsapp_status_callback(
         },
     )
     return Response(status_code=204)
+
+
+@router.get("/admin/rfqs", dependencies=[Depends(require_api_key)])
+def list_admin_rfqs(status: str | None = None, since: datetime | None = None,
+                    limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db)):
+    query = db.query(RFQRequest)
+    if status:
+        query = query.filter(RFQRequest.status == status)
+    if since:
+        query = query.filter(RFQRequest.created_at >= since)
+    return [admin_rfq_record(db, rfq) for rfq in query.order_by(RFQRequest.created_at.desc(), RFQRequest.id.desc()).limit(limit).all()]
+
+
+def admin_rfq_record(db, rfq):
+    def record(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns if not c.name.startswith("vendor_")}
+    return {**record(rfq), "items": [record(item) for item in get_rfq_line_items(db, rfq.id)]}
+
+
+@router.post("/admin/export-ops", dependencies=[Depends(require_api_key)])
+async def trigger_ops_export():
+    import asyncio
+    from app.integrations.sheets_export import export_ops
+    return await asyncio.to_thread(export_ops)

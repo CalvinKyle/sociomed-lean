@@ -25,6 +25,8 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     setup_logging()
     validate_config()
+    from app.integrations.sheets_export import log_export_configuration
+    log_export_configuration()
     scheduler = None
     if SHEETS_AUTO_SYNC_ENABLED:
         scheduler = start_sheets_sync_scheduler(SHEETS_AUTO_SYNC_INTERVAL_MINUTES)

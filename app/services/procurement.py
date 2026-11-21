@@ -95,6 +95,8 @@ class RFQNotificationDispatch:
 def create_buyer_lead(db: Session, payload: BuyerLeadCreate) -> BuyerLead:
     lead = create_buyer_lead_record(db, payload)
     log_audit_event(lead.phone, "buyer_lead_created", {"lead_id": lead.id, "organization": lead.organization})
+    from app.integrations.sheets_export import schedule_ops_export
+    schedule_ops_export()
     return lead
 
 
@@ -112,6 +114,8 @@ def create_rfq_request(db: Session, payload: RFQCreate) -> RFQRequest:
         rfq_id=rfq.id,
         data={"product_id": rfq.product_id, "product_name": rfq.product_name, "quantity": rfq.quantity},
     )
+    from app.integrations.sheets_export import schedule_ops_export
+    schedule_ops_export()
     return rfq
 
 
