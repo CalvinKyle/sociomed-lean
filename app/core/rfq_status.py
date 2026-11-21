@@ -2,13 +2,15 @@
 
 new       -> RFQ captured, not yet reviewed
 quoted    -> price/availability confirmed with buyer
+approved  -> owner approved for LPO within rolling cap
+lpo_issued -> LPO reference recorded
 confirmed -> buyer has committed to proceed
 fulfilled -> order completed with the supplier
 cancelled -> buyer withdrew or never confirmed
 lost      -> buyer proceeded elsewhere
 """
 
-RFQ_STATUSES = ("new", "quoted", "confirmed", "fulfilled", "cancelled", "lost")
+RFQ_STATUSES = ("new", "quoted", "approved", "lpo_issued", "confirmed", "fulfilled", "cancelled", "lost")
 
 BUYER_NOTIFIABLE_STATUSES = {"confirmed", "fulfilled"}
 

@@ -41,6 +41,7 @@ from app.schemas.schemas import (
     CatalogSearchResponse,
     FeaturedCatalogResponse,
     RFQCreate,
+    RFQLineItemCreate,
     RFQResponse,
     RFQStatusResponse,
     RFQStatusUpdate,
@@ -505,3 +506,56 @@ async def trigger_ops_export():
     import asyncio
     from app.integrations.sheets_export import export_ops
     return await asyncio.to_thread(export_ops)
+
+
+from pydantic import BaseModel, Field, ConfigDict
+from app.services import quote_workflow as workflow
+
+class LineEdit(BaseModel):
+    product_name: str | None = Field(default=None, min_length=1, max_length=160)
+    quantity: int | None = Field(default=None, gt=0)
+    uom: str | None = Field(default=None, max_length=80)
+    unit_price: int | None = Field(default=None, gt=0)
+
+class NamedActor(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    approved_by: str = Field(min_length=1, max_length=120)
+
+class ReviewActor(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    reviewed_by: str = Field(min_length=1, max_length=120)
+
+class BatchApproval(NamedActor):
+    rfq_ids: list[int] = Field(min_length=1, max_length=500)
+
+class LPOReference(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    lpo_reference: str = Field(min_length=1, max_length=160)
+
+@router.patch('/rfqs/{rfq_id}/line-items/{line_id}', dependencies=[Depends(require_api_key)])
+def edit_rfq_line(rfq_id: int, line_id: int, payload: LineEdit, db: Session = Depends(get_db)):
+    return admin_rfq_record(db, workflow.edit_line(db, rfq_id, payload.model_dump(exclude_unset=True), line_id))
+
+@router.post('/rfqs/{rfq_id}/line-items', dependencies=[Depends(require_api_key)])
+def add_rfq_line(rfq_id: int, payload: RFQLineItemCreate, db: Session = Depends(get_db)):
+    return admin_rfq_record(db, workflow.edit_line(db, rfq_id, payload.model_dump()))
+
+@router.post('/rfqs/{rfq_id}/technical-review', dependencies=[Depends(require_api_key)])
+def review_rfq(rfq_id: int, payload: ReviewActor, db: Session = Depends(get_db)):
+    return admin_rfq_record(db, workflow.technical_review(db, rfq_id, payload.reviewed_by))
+
+@router.post('/rfqs/{rfq_id}/approve', dependencies=[Depends(require_api_key)])
+def approve_rfq(rfq_id: int, payload: NamedActor, db: Session = Depends(get_db)):
+    return admin_rfq_record(db, workflow.approve(db, [rfq_id], payload.approved_by)[0])
+
+@router.get('/admin/approval-queue', dependencies=[Depends(require_api_key)])
+def approval_queue(db: Session = Depends(get_db)):
+    return [admin_rfq_record(db, r) for r in db.query(RFQRequest).filter(RFQRequest.status == 'quoted').order_by(RFQRequest.quoted_at, RFQRequest.id).limit(workflow.batch_size()).all()]
+
+@router.post('/admin/approve-batch', dependencies=[Depends(require_api_key)])
+def approve_batch(payload: BatchApproval, db: Session = Depends(get_db)):
+    return [admin_rfq_record(db, r) for r in workflow.approve(db, payload.rfq_ids, payload.approved_by)]
+
+@router.post('/rfqs/{rfq_id}/lpo', dependencies=[Depends(require_api_key)])
+def record_lpo(rfq_id: int, payload: LPOReference, db: Session = Depends(get_db)):
+    return admin_rfq_record(db, workflow.issue_lpo(db, rfq_id, payload.lpo_reference))

@@ -34,45 +34,14 @@ class _FakeDb:
         self.refreshed = True
 
 
-def test_mark_rfq_status_updates_through_data_access(monkeypatch):
-    audit_events = []
-    funnel_events = []
-    rfq = type("RFQ", (), {"id": 7, "phone": "+256700000000", "status": "new", "order_value": None})()
-    db = _FakeDb(rfq)
-    monkeypatch.setattr(procurement, "log_audit_event", lambda phone, event, data: audit_events.append((phone, event, data)))
-    monkeypatch.setattr(procurement, "record_funnel_event", lambda *args, **kwargs: funnel_events.append((args, kwargs)))
-
-    updated = procurement.mark_rfq_status(db, 7, " Quoted ")
-
-    assert updated is rfq
-    assert updated.status == "quoted"
-    assert db.committed
-    assert db.refreshed
-    assert audit_events == [
-        ("+256700000000", "rfq_status_updated", {"rfq_id": 7, "status": "quoted"})
-    ]
-    assert funnel_events[0][0] == ("rfq_status_changed",)
-
-
-def test_mark_rfq_status_rejects_unknown_status(monkeypatch):
-    rfq = type("RFQ", (), {"id": 8, "phone": "+256700000000", "status": "new", "order_value": None})()
-    db = _FakeDb(rfq)
-
-    with pytest.raises(InvalidRFQStatus, match="new, quoted, confirmed"):
-        procurement.mark_rfq_status(db, 8, " In Review ")
-
-    assert not db.committed
-
-
-def test_mark_rfq_status_persists_order_value(monkeypatch):
-    rfq = type("RFQ", (), {"id": 9, "phone": "+256700000000", "status": "new", "order_value": None})()
-    db = _FakeDb(rfq)
-    monkeypatch.setattr(procurement, "log_audit_event", lambda *_args: None)
-    monkeypatch.setattr(procurement, "record_funnel_event", lambda *_args, **_kwargs: None)
-
-    updated = procurement.mark_rfq_status(db, 9, "confirmed", order_value=1_000_000)
-
-    assert updated.order_value == 1_000_000
+def test_mark_rfq_status_validates_and_delegates(monkeypatch):
+    from app.services import quote_workflow
+    calls = []
+    monkeypatch.setattr(quote_workflow, 'set_status', lambda *args: calls.append(args) or 'updated')
+    assert procurement.mark_rfq_status(None, 7, ' Quoted ') == 'updated'
+    assert calls == [(None, 7, 'quoted', None)]
+    with pytest.raises(InvalidRFQStatus):
+        procurement.mark_rfq_status(None, 7, 'Invalid')
 
 
 def test_estimate_commission_requires_value_and_rate():

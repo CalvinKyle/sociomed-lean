@@ -302,6 +302,14 @@ class RFQRequest(Base):
     manual_review_reason = Column(String)
     order_value = Column(Integer, nullable=True)
     pfi_reference = Column(String, nullable=True)
+    quoted_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    approved_by = Column(String, nullable=True)
+    lpo_reference = Column(String, nullable=True)
+    lpo_issued_at = Column(DateTime, nullable=True)
+    technical_reviewed_at = Column(DateTime, nullable=True)
+    technical_reviewed_by = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -484,3 +492,11 @@ def load_data():
         }
     finally:
         db.close()
+
+
+class ApprovalEvent(Base):
+    __tablename__ = 'rfq_approval_events'
+    id = Column(Integer, primary_key=True)
+    rfq_id = Column(Integer, ForeignKey('rfq_requests.id'), nullable=False)
+    approved_at = Column(DateTime, nullable=False, index=True)
+    approved_by = Column(String, nullable=False)

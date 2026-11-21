@@ -40,3 +40,5 @@
 - Pilot step 1: disable supplier messaging; remove supplier contact from Redis options; team receipt copy; complete sales alerts with bounded chunks. Legacy flag conflict recorded in docs/PILOT_PR_REVIEW.md.
 
 - Step 2: API-key RFQ list and serialized, best-effort operations sheet snapshots (RFQs, lines, leads); shared lazy credentials, RAW values, separate destination guard.
+
+- Step 3: shared quote/edit/review/approval/LPO workflow; 0014 migration; global rolling approval cap with immutable approval history and PostgreSQL transaction lock (single approvals count too). Editing invalidates quote/review/approval.

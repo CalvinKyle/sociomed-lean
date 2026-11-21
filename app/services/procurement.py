@@ -135,17 +135,8 @@ def mark_rfq_status(
             f"'{status}' is not a recognized RFQ status. Use one of: {', '.join(RFQ_STATUSES)}."
         )
 
-    rfq = update_rfq_status(db, rfq_id, normalized, order_value=order_value)
-    if rfq:
-        log_audit_event(rfq.phone, "rfq_status_updated", {"rfq_id": rfq.id, "status": rfq.status})
-        record_funnel_event(
-            "rfq_status_changed",
-            source="api",
-            actor_id=rfq.phone,
-            rfq_id=rfq.id,
-            data={"status": rfq.status, "order_value": rfq.order_value},
-        )
-    return rfq
+    from app.services.quote_workflow import set_status
+    return set_status(db, rfq_id, normalized, order_value)
 
 
 BUYER_STATUS_MESSAGES = {
