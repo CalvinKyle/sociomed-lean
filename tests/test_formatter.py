@@ -34,7 +34,8 @@ def test_format_results_returns_selectable_offer_options():
     assert "UoM: Box of 100" in message
     assert "UGX 1,100 - UGX 1,200" in message
     assert "10-99 Box of 100: UGX 1,200" in message
-    assert option_map[0]["vendor_name"] == "MedSource"
+    assert "vendor_name" not in option_map[0]
+    assert "vendor_phone" not in option_map[0]
     assert option_map[0]["sku"] == "SM-GLOVE-001"
     assert option_map[0]["min_qty"] == 10
     assert option_map[0]["uom"] == "Box of 100"

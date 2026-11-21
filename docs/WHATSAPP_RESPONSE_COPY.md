@@ -726,3 +726,7 @@ New requests:                            [when present]
 ## Complete flow reference
 
 The state-by-state routing, global commands, intent order, search behavior, and test checklist are documented in `docs/WHATSAPP_CONVERSATION_LOGIC.md`.
+
+## Pilot receipt correction
+`rfq_received`, `direct_rfq_received`, `bulk_rfq_received`: Quotation request received. RFQ #{rfq_id}. Our team will confirm availability and prices and reply to you here.
+`supplier_notified`, `supplier_manual`: Our team will confirm availability and prices. No supplier notification is claimed.

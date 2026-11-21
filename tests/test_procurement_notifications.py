@@ -43,8 +43,8 @@ def test_dispatch_records_failed_supplier_notification_and_sales_fallback(monkey
 
     assert dispatch.supplier_notified is False
     assert dispatch.status == "manual_routing_required"
-    assert dispatch.failure_reason == "whatsapp_api_error"
-    assert ("+256700000000", "rfq_supplier_notification_failed", audit_events[0][2]) in audit_events
+    assert dispatch.failure_reason == "supplier_direct_notify_disabled"
+    assert ("+256700000000", "rfq_supplier_notification_skipped", audit_events[0][2]) in audit_events
     assert any(event == "rfq_sales_notification_sent" for _, event, _ in audit_events)
     assert any(event == "rfq_manual_routing_required" for _, event, _ in audit_events)
 
@@ -62,7 +62,7 @@ def test_dispatch_audits_missing_vendor_phone_without_failing_rfq(monkeypatch):
     dispatch = asyncio.run(procurement.dispatch_rfq_notifications_detail(_rfq(), None))
 
     assert dispatch.supplier_notified is False
-    assert dispatch.failure_reason == "missing_supplier_phone"
+    assert dispatch.failure_reason == "supplier_direct_notify_disabled"
     assert any(event == "rfq_supplier_notification_skipped" for _, event, _ in audit_events)
     assert any(event == "rfq_sales_notification_sent" for _, event, _ in audit_events)
 
@@ -80,6 +80,25 @@ def test_dispatch_captures_send_exceptions_as_audit_failures(monkeypatch):
     dispatch = asyncio.run(procurement.dispatch_rfq_notifications_detail(_rfq(), "+256700111111"))
 
     assert dispatch.status == "notification_failed"
-    assert dispatch.failure_reason == "send_exception"
-    assert any(event == "rfq_supplier_notification_failed" for _, event, _ in audit_events)
+    assert dispatch.failure_reason == "supplier_direct_notify_disabled"
+    assert any(event == "rfq_supplier_notification_skipped" for _, event, _ in audit_events)
     assert any(event == "rfq_sales_notification_failed" for _, event, _ in audit_events)
+
+
+def test_vendor_is_never_contacted(monkeypatch):
+    recipients = []
+    async def send(recipient, message):
+        recipients.append(recipient)
+        assert len(message) < 1500
+        return WhatsAppSendResult(recipient=recipient, success=True)
+    monkeypatch.setattr(procurement, "SALES_AGENT_PHONE", "+256700222222")
+    monkeypatch.setattr(procurement, "send_whatsapp_message_result", send)
+    asyncio.run(procurement.dispatch_rfq_notifications_detail(_rfq(), "+256700111111"))
+    assert recipients == ["+256700222222"]
+
+
+def test_receipt_copy_has_no_supplier_claim():
+    from app.core.conversation_copy import load_conversation_copy
+    copy = load_conversation_copy()
+    for key in ("supplier_notified", "supplier_manual", "rfq_received", "direct_rfq_received", "bulk_rfq_received"):
+        assert "supplier" not in copy[key].lower()

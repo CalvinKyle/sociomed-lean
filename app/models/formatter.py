@@ -63,8 +63,6 @@ def format_results(product_name, results, currency="UGX"):
             "inventory_id": item.get("inventory_id"),
             "product_id": item.get("product_id"),
             "vendor_id": item.get("vendor_id"),
-            "vendor_name": item.get("vendor_name"),
-            "vendor_phone": item.get("vendor_phone"),
             "stock_qty": item.get("stock_qty", 0),
             "lead_time_days": item.get("lead_time_days"),
             "min_qty": item.get("min_qty", 1),

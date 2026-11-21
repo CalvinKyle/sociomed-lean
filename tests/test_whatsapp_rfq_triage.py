@@ -89,7 +89,7 @@ def test_bulk_direct_rfq_is_logged_for_manual_triage(monkeypatch):
     assert created_payload["source"] == "whatsapp_bulk_rfq"
     assert created_payload["product_name"] == "Bulk RFQ: gloves x10, catheters x5"
     assert "Bulk RFQ items" in created_payload["notes"]
-    assert "bulk quotation request has been logged" in sent_messages[-1]
+    assert "Quotation request received" in sent_messages[-1]
     assert any(event == "bulk_rfq_triaged" for _, event, _ in audit_events)
 
 

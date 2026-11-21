@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import SALES_AGENT_PHONE
 from app.core.conversation_copy import conversation_message
@@ -186,8 +186,12 @@ def _rfq_summary(rfq: RFQRequest) -> str:
         f"Quantity: {rfq.quantity}",
         f"Delivery: {rfq.delivery_location}",
     ]
-    if rfq.vendor_name:
-        lines.append(f"Preferred supplier: {rfq.vendor_name}")
+    db = object_session(rfq)
+    if db is not None:
+        from app.data_access.procurement import get_rfq_line_items
+        lines.extend(f"- {item.product_name} x{item.quantity} {item.uom or 'unit'}"
+                     for item in get_rfq_line_items(db, rfq.id))
+    lines.append(f"Equipment review required: {bool(rfq.equipment_review_required)}")
     if rfq.notes:
         lines.append(f"Notes: {rfq.notes}")
     return "\n".join(lines)
@@ -203,7 +207,11 @@ async def _send_notification(channel: str, recipient: Optional[str], message: st
         return NotificationAttempt.skipped_attempt(channel, f"missing_{channel}_phone")
 
     try:
-        result = await send_whatsapp_message_result(recipient, message)
+        result = None
+        for start in range(0, len(message), 1499):
+            result = await send_whatsapp_message_result(recipient, message[start:start + 1499])
+            if not result.success:
+                break
         return NotificationAttempt.from_send_result(channel, result)
     except Exception as exc:
         return NotificationAttempt.from_exception(channel, recipient, exc)
@@ -236,7 +244,8 @@ async def dispatch_rfq_notifications_detail(
     vendor_phone: Optional[str] = None,
 ) -> RFQNotificationDispatch:
     summary = _rfq_summary(rfq)
-    supplier_attempt = await _send_notification("supplier", vendor_phone, summary)
+    # Supplier contact is owner-only; never transmit buyer details to suppliers.
+    supplier_attempt = NotificationAttempt.skipped_attempt("supplier", "supplier_direct_notify_disabled")
     _audit_notification_attempt(rfq, supplier_attempt)
 
     sales_attempt = await _send_notification("sales", SALES_AGENT_PHONE, summary)
@@ -291,4 +300,4 @@ async def dispatch_lead_notification(lead: BuyerLead) -> None:
     if lead.use_case:
         message += f"\nNeed: {lead.use_case}"
 
-    await send_whatsapp_message(SALES_AGENT_PHONE, message)
+    await _send_notification("sales", SALES_AGENT_PHONE, message)
