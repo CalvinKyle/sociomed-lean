@@ -730,3 +730,13 @@ The state-by-state routing, global commands, intent order, search behavior, and 
 ## Pilot receipt correction
 `rfq_received`, `direct_rfq_received`, `bulk_rfq_received`: Quotation request received. RFQ #{rfq_id}. Our team will confirm availability and prices and reply to you here.
 `supplier_notified`, `supplier_manual`: Our team will confirm availability and prices. No supplier notification is claimed.
+
+`request_buyer_name`: What is your contact name?
+
+`request_organization`: What is your organisation or facility name?
+
+`request_delivery_location`: Where should we deliver?
+
+`request_confirm`: Reply YES to send, or send the corrected item list.
+
+`request_item_limit`: Please send up to 20 items with positive quantities. Send longer lists in parts, or reply SALES.

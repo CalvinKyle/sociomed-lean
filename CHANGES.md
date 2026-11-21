@@ -44,3 +44,5 @@
 - Step 3: shared quote/edit/review/approval/LPO workflow; 0014 migration; global rolling approval cap with immutable approval history and PostgreSQL transaction lock (single approvals count too). Editing invalidates quote/review/approval.
 
 - Step 4: mobile server-rendered /ops console with fail-closed Basic authentication, escaped content, same-origin and per-render cookie/form CSRF protection, using shared quote services.
+
+- Step 5: structured natural/pipe item intake, per-item quantities, protected compound names, saved contact reuse, one-at-a-time missing fields and explicit confirmation; 20-item cap and verified tier resolution.

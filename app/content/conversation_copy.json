@@ -88,5 +88,10 @@
   "ambiguous_next_large": "Reply with the product number to price one item first.\nReply RFQ if this is a bulk request, or AGENT for a sourcing handoff.",
   "ambiguous_next_small": "Reply with the product number you want to price first. Reply RFQ for a manual quotation, or AGENT for sales.",
   "buyer_status_confirmed": "Good news — your order (RFQ #{rfq_id}) for {product_name} is confirmed. The supplier is preparing it and we'll follow up with delivery details shortly.",
-  "buyer_status_fulfilled": "Your order (RFQ #{rfq_id}) for {product_name} has been fulfilled. Thank you for sourcing through SocioMED — reply 1 any time to start your next order, or END to close the session."
+  "buyer_status_fulfilled": "Your order (RFQ #{rfq_id}) for {product_name} has been fulfilled. Thank you for sourcing through SocioMED — reply 1 any time to start your next order, or END to close the session.",
+  "request_buyer_name": "What is your contact name?",
+  "request_organization": "What is your organisation or facility name?",
+  "request_delivery_location": "Where should we deliver?",
+  "request_confirm": "Reply YES to send, or send the corrected item list.",
+  "request_item_limit": "Please send up to 20 items with positive quantities. Send longer lists in parts, or reply SALES."
 }

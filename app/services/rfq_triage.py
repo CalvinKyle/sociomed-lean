@@ -146,7 +146,7 @@ def parse_direct_rfq_message(
             return DirectRFQPayload(
                 buyer_name=buyer_name,
                 product_name=_bulk_product_name(items),
-                quantity=max(quantity, len(items)),
+                quantity=parse_requested_items(item_text)[0]["quantity"],
                 organization=facility,
                 delivery_location=location,
                 source="whatsapp_bulk_rfq",
@@ -171,7 +171,7 @@ def parse_direct_rfq_message(
         return DirectRFQPayload(
             buyer_name=buyer_name,
             product_name=_bulk_product_name(items),
-            quantity=len(items),
+            quantity=parse_requested_items(item_text)[0]["quantity"],
             organization=facility,
             delivery_location=location,
             source="whatsapp_bulk_rfq",
@@ -201,3 +201,62 @@ def format_ambiguous_match_message(matches: list[Dict]) -> str:
         next_step = conversation_message("ambiguous_next_small")
 
     return f"{conversation_message('ambiguous_header')}\n{product_list}\n\n{next_step}"
+
+
+def parse_requested_items(text: str, products=None) -> list[dict]:
+    """Parse quantities without turning item count into a requested quantity."""
+    protected = text.strip()
+    names = ['bed and mattress', 'gauze and bandage'] + [p.get('name', '') for p in (products or [])]
+    for name in sorted(names, key=len, reverse=True):
+        if ' and ' in name.lower():
+            protected = re.sub(re.escape(name), lambda m: re.sub(r'\band\b', '§', m[0], flags=re.I), protected, flags=re.I)
+    parts = re.split(r'\s*(?:[,;+\n]|\band\b)\s*', protected, flags=re.I)
+    parsed = []
+    for part in parts:
+        part = part.replace('§', 'and').strip(' .')
+        part = re.sub(r'^(?:i need|we need|i want|please quote|quote for|quotation for)\s+', '', part, flags=re.I)
+        if not part:
+            continue
+        quantity, stated, uom = 1, False, None
+        suffix = re.search(r'\s*[xX]\s*(\d+)\s*$', part)
+        prefix = re.match(r'^(\d+)\s*(?:[xX]\s+)?(.+)$', part)
+        if suffix:
+            quantity, stated, part = int(suffix[1]), True, part[:suffix.start()].strip()
+        elif prefix:
+            quantity, stated, part = int(prefix[1]), True, prefix[2].strip()
+        unit = re.match(r'^(boxes?|packs?|cartons?|pieces?|units?|pairs?|sets?|rolls?|bottles?|bags?|kits?)\s+(?:of\s+)?(.+)$', part, re.I)
+        if unit:
+            uom, part = unit[1].lower(), unit[2].strip()
+        if not part or quantity <= 0:
+            raise ValueError('Each item needs a name and positive quantity')
+        parsed.append({'product_name': part, 'quantity': quantity, 'uom': uom, 'quantity_stated': stated})
+    if len(parsed) > 20:
+        raise ValueError('Send at most 20 items at a time, in parts, or reply SALES')
+    return parsed
+
+
+def resolve_requested_items(items: list[dict], data: dict, currency='UGX') -> list[dict]:
+    from rapidfuzz.fuzz import ratio
+    resolved = []
+    products = data.get('products', [])
+    for item in items:
+        name = item['product_name']
+        # Strict name/alias matching avoids committing a fuzzy guess as a purchase.
+        matches = [p for p in products if ratio(name.lower(), p['name'].lower()) >= 90]
+        aliases = {a['product_id'] for a in data.get('aliases', []) if a['alias'].lower() == name.lower()}
+        matches += [p for p in products if p['product_id'] in aliases and p not in matches]
+        product = matches[0] if len(matches) == 1 else None
+        line = {k: item.get(k) for k in ('product_name', 'quantity', 'uom')}
+        line.update(product_id=None, unit_price=None)
+        if product:
+            offers = get_results(product['product_id'], data, currency=currency)
+            offer = offers[0] if offers else {}
+            line.update(product_id=product['product_id'], product_name=product['name'], vendor_id=offer.get('vendor_id'))
+            line['uom'] = item.get('uom') or offer.get('uom')
+            # get_results returns only offer-wide verified/unexpired pricing.
+            for tier in offer.get('pricing', []):
+                if tier['min_qty'] <= item['quantity'] and (tier.get('max_qty') is None or item['quantity'] <= tier['max_qty']):
+                    line['unit_price'] = tier['unit_price']
+                    break
+        resolved.append(line)
+    return resolved

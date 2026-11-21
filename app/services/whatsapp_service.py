@@ -41,6 +41,8 @@ from app.services.rfq_triage import (
     is_bulk_request,
     is_complex_bulk_request,
     parse_direct_rfq_message,
+    parse_requested_items,
+    resolve_requested_items,
 )
 from app.services.search import FAMILY_DISPLAY_NAMES, find_products, get_results
 from app.services.procurement_policy import is_equipment_product
@@ -646,12 +648,14 @@ async def _create_whatsapp_rfq(
     currency: str = "UGX",
     equipment_review_required: bool = False,
     manual_review_reason: Optional[str] = None,
+    items: Optional[list[dict]] = None,
 ) -> tuple[int, bool]:
     db = SessionLocal()
     try:
         rfq = create_rfq_request(
             db,
             RFQCreate(
+                items=items,
                 buyer_name=buyer_name,
                 organization=organization,
                 phone=sender,
@@ -671,10 +675,9 @@ async def _create_whatsapp_rfq(
                 manual_review_reason=manual_review_reason,
             ),
         )
+        supplier_notified = await dispatch_rfq_notifications(rfq, vendor_phone)
     finally:
         db.close()
-
-    supplier_notified = await dispatch_rfq_notifications(rfq, vendor_phone)
     return rfq.id, supplier_notified
 
 
@@ -778,6 +781,9 @@ async def handle_incoming_message(message: Dict):
 
     if not session or current_state in {ConversationState.IDLE.value, ConversationState.MENU.value}:
         data = get_cached_data()
+        if '|' in text or len(parse_requested_items_safe(text, data)) > 1:
+            await _collect_requested_rfq(sender, text, {"buyer_profile": _load_buyer_profile(sender)}, currency)
+            return
         entry_intent = classify_entry_intent(
             text,
             data.get("products", []),
@@ -813,6 +819,9 @@ async def handle_incoming_message(message: Dict):
         if entry_intent.intent in {BuyerIntent.FORMAL_PURCHASE, BuyerIntent.MULTI_ITEM} or (
             entry_intent.intent == BuyerIntent.NAVIGATION and entry_intent.navigation == "quote"
         ):
+            if entry_intent.intent in {BuyerIntent.FORMAL_PURCHASE, BuyerIntent.MULTI_ITEM}:
+                await _collect_requested_rfq(sender, text, {"buyer_profile": _load_buyer_profile(sender)}, currency)
+                return
             profile = _load_buyer_profile(sender)
             prompt = _direct_rfq_prompt()
             if profile and profile.get("delivery_location"):
@@ -896,14 +905,7 @@ async def handle_incoming_message(message: Dict):
 
     if current_state == ConversationState.SEARCHING.value:
         if is_bulk_request(text):
-            detail = conversation_message("bulk_detected")
-            if is_complex_bulk_request(text):
-                detail = conversation_message("bulk_complex")
-            await send_whatsapp_message(
-                sender,
-                f"{detail}\n\n{_direct_rfq_prompt()}",
-            )
-            _transition_session(sender, current_state, ConversationState.DIRECT_RFQ)
+            await _collect_requested_rfq(sender, text, {"buyer_profile": _load_buyer_profile(sender)}, currency)
             return
 
         if not validate_product_query(text):
@@ -1542,70 +1544,7 @@ async def handle_incoming_message(message: Dict):
         return
 
     if current_state == ConversationState.DIRECT_RFQ.value:
-        rfq_payload = parse_direct_rfq_message(
-            text,
-            buyer_profile=session.get("buyer_profile"),
-        )
-        if not rfq_payload:
-            await send_whatsapp_message(sender, conversation_message("direct_rfq_invalid_format"))
-            return
-
-        if (
-            not validate_contact_name(rfq_payload.buyer_name)
-            or not validate_quantity(rfq_payload.quantity)
-            or not validate_facility_name(rfq_payload.organization)
-            or not validate_delivery_location(rfq_payload.delivery_location)
-        ):
-            await send_whatsapp_message(sender, conversation_message("direct_rfq_invalid_data"))
-            return
-        try:
-            rfq_id, _ = await _create_whatsapp_rfq(
-                sender=sender,
-                buyer_name=rfq_payload.buyer_name,
-                product_name=rfq_payload.product_name,
-                quantity=rfq_payload.quantity,
-                organization=rfq_payload.organization,
-                delivery_location=rfq_payload.delivery_location,
-                source=rfq_payload.source,
-                notes=rfq_payload.notes,
-                currency=currency,
-                equipment_review_required=is_equipment_product(
-                    {"name": rfq_payload.product_name}
-                ),
-                manual_review_reason=(
-                    "complex_multi_item_review"
-                    if rfq_payload.is_bulk and is_complex_bulk_request(rfq_payload.product_name)
-                    else (
-                        "equipment_technical_review"
-                        if is_equipment_product({"name": rfq_payload.product_name})
-                        else None
-                    )
-                ),
-            )
-        except Exception as exc:
-            log_audit_event(sender, "direct_whatsapp_rfq_failed", {"error": str(exc)})
-            await send_whatsapp_message(sender, conversation_message("direct_rfq_submit_error"))
-            _transition_session(sender, current_state, ConversationState.MENU)
-            return
-
-        if rfq_payload.is_bulk:
-            log_audit_event(
-                sender,
-                "bulk_rfq_triaged",
-                {"rfq_id": rfq_id, "item_count": rfq_payload.item_count, "source": rfq_payload.source},
-            )
-            await send_whatsapp_message(
-                sender,
-                conversation_message("bulk_rfq_received", rfq_id=rfq_id),
-            )
-            _transition_session(sender, current_state, ConversationState.MENU)
-            return
-
-        await send_whatsapp_message(
-            sender,
-            conversation_message("direct_rfq_received", rfq_id=rfq_id),
-        )
-        _transition_session(sender, current_state, ConversationState.MENU)
+        await _collect_requested_rfq(sender, text, session, currency)
         return
 
     if current_state == ConversationState.TALK_TO_AGENT.value:
@@ -1625,3 +1564,82 @@ async def handle_incoming_message(message: Dict):
         return
 
     await send_whatsapp_message(sender, conversation_message("unknown_state"))
+
+
+def parse_requested_items_safe(text, data):
+    try:
+        return parse_requested_items(text, data.get('products', []))
+    except ValueError:
+        return [{}] * 21
+
+
+async def _collect_requested_rfq(sender, text, session, currency):
+    data = get_cached_data()
+    draft = dict(session.get('request_draft') or {})
+    profile = session.get('buyer_profile') or {}
+    for field, profile_key in [('buyer_name', 'contact_name'), ('organization', 'organization'), ('delivery_location', 'delivery_location')]:
+        if not draft.get(field) and profile.get(profile_key):
+            draft[field] = profile[profile_key]
+    awaiting = session.get('request_field')
+    if awaiting:
+        validators = {'buyer_name': validate_contact_name, 'organization': validate_facility_name, 'delivery_location': validate_delivery_location}
+        if not validators[awaiting](text):
+            await send_whatsapp_message(sender, conversation_message('request_' + awaiting))
+            return
+        draft[awaiting] = text.strip()
+    elif session.get('request_confirm') and text.lower() == 'yes':
+        items = resolve_requested_items(draft['items'], data, currency)
+        by_id = {p['product_id']: p for p in data.get('products', [])}
+        equipment = any(is_equipment_product(by_id.get(i.get('product_id'), {'name': i['product_name']})) for i in items)
+        try:
+            rfq_id, _ = await _create_whatsapp_rfq(sender=sender, buyer_name=draft['buyer_name'],
+                organization=draft['organization'], delivery_location=draft['delivery_location'],
+                product_name=items[0]['product_name'], quantity=items[0]['quantity'], items=items,
+                source='whatsapp_bulk_rfq' if len(items) > 1 else 'whatsapp_direct_rfq', currency=currency,
+                equipment_review_required=equipment, manual_review_reason=session.get('manual_review_reason'),
+                notes='Buyer confirmed parsed item quantities')
+        except Exception:
+            await send_whatsapp_message(sender, conversation_message('direct_rfq_submit_error'))
+            return
+        _transition_session(sender, ConversationState.DIRECT_RFQ.value, ConversationState.MENU)
+        await send_whatsapp_message(sender, conversation_message('direct_rfq_received', rfq_id=rfq_id))
+        return
+    else:
+        item_text = text
+        if '|' in text:
+            parts = [p.strip() for p in text.split('|')]
+            if len(parts) in {4, 5}:
+                draft.update(buyer_name=parts[0], organization=parts[-2], delivery_location=parts[-1])
+                item_text = parts[1]
+                if len(parts) == 5 and len(parse_requested_items_safe(item_text, data)) == 1:
+                    item_text += ' x' + parts[2]
+            elif len(parts) == 2 and profile:
+                item_text = parts[0] + ' x' + parts[1]
+            else:
+                await send_whatsapp_message(sender, conversation_message('direct_rfq_invalid_format'))
+                return
+        try:
+            draft['items'] = parse_requested_items(item_text, data.get('products', []))
+            if not draft['items']:
+                raise ValueError()
+        except ValueError:
+            await send_whatsapp_message(sender, conversation_message('request_item_limit'))
+            return
+    for field, validator in [('buyer_name', validate_contact_name), ('organization', validate_facility_name), ('delivery_location', validate_delivery_location)]:
+        if not validator(draft.get(field, '')):
+            _transition_session(sender, ConversationState.DIRECT_RFQ.value, ConversationState.DIRECT_RFQ,
+                request_draft=draft, request_field=field, manual_review_reason=session.get('manual_review_reason'))
+            await send_whatsapp_message(sender, conversation_message('request_' + field))
+            return
+    _transition_session(sender, ConversationState.DIRECT_RFQ.value, ConversationState.DIRECT_RFQ,
+        request_draft=draft, request_confirm=True, manual_review_reason=session.get('manual_review_reason'))
+    lines = [f"{n}. {i['product_name']} x{i['quantity']} {i.get('uom') or 'unit'}" +
+             ('' if i['quantity_stated'] else ' (quantity not stated)') for n, i in enumerate(draft['items'], 1)]
+    # Send every line in bounded messages, without silently truncating a list.
+    chunk = ''
+    for line in lines:
+        if len(chunk) + len(line) > 1200:
+            await send_whatsapp_message(sender, chunk)
+            chunk = ''
+        chunk += line[:1000] + '\n'
+    await send_whatsapp_message(sender, chunk + conversation_message('request_confirm'))

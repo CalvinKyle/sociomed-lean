@@ -36,7 +36,7 @@ def test_parse_direct_rfq_message_routes_bulk_lists_to_manual_triage():
     assert payload is not None
     assert payload.buyer_name == "Dr. Ali"
     assert payload.product_name == "Bulk RFQ: gloves x10, catheters x5, IV sets x20"
-    assert payload.quantity == 3
+    assert payload.quantity == 10
     assert payload.source == "whatsapp_bulk_rfq"
     assert payload.is_bulk is True
     assert "Bulk RFQ items" in payload.notes
